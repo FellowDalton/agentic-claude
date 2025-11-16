@@ -9,7 +9,6 @@ import {
   AgentPromptResponse,
   AgentTemplateRequest,
   RetryCode,
-  ClaudeCodeResultMessageSchema,
 } from "./models.ts";
 import { logger, sleep, truncateOutput } from "./utils.ts";
 
@@ -62,7 +61,7 @@ export async function executeClaudeCode(
     const exitCode = await proc.exited;
 
     // Parse the JSONL output
-    const { messages, resultMessage } = await parseJSONLOutput(request.output_file);
+    const { resultMessage } = await parseJSONLOutput(request.output_file);
 
     // Convert JSONL to JSON array
     await convertJSONLToJSON(request.output_file);
@@ -149,12 +148,13 @@ export async function executeClaudeCodeWithRetry(
 ): Promise<AgentPromptResponse> {
   // Ensure we have enough delays
   while (retryDelays.length < maxRetries) {
-    retryDelays.push(retryDelays[retryDelays.length - 1] + 2);
+    const lastDelay = retryDelays[retryDelays.length - 1] ?? 1;
+    retryDelays.push(lastDelay + 2);
   }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
-      const delay = retryDelays[attempt - 1];
+      const delay = retryDelays[attempt - 1] ?? 2;
       logger.warn(`Retrying in ${delay} seconds... (attempt ${attempt}/${maxRetries})`);
       await sleep(delay * 1000);
     }
@@ -241,7 +241,7 @@ async function savePrompt(
 ): Promise<void> {
   // Extract slash command from prompt
   const match = prompt.match(/^(\/\w+)/);
-  if (!match) {
+  if (!match || !match[1]) {
     return;
   }
 

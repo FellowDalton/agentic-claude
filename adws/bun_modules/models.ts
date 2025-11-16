@@ -135,18 +135,18 @@ export const NotionTaskHelpers = {
   },
 
   extractAppContext(task: NotionTask): string | undefined {
-    return task.tags.app;
+    return task.tags["app"];
   },
 
   getPreferredModel(task: NotionTask): ModelTypeValue {
-    const model = task.model || task.tags.model || "sonnet";
+    const model = task.model || task.tags["model"] || "sonnet";
     return model === "opus" || model === "sonnet" ? model : "sonnet";
   },
 
   shouldUseFullWorkflow(task: NotionTask): boolean {
     return (
       task.workflow_type === "plan" ||
-      task.tags.workflow === "plan" ||
+      task.tags["workflow"] === "plan" ||
       (task.task_prompt?.length ?? 0) > 500
     );
   },
@@ -217,7 +217,9 @@ export const TeamworkTaskHelpers = {
     const tags: Record<string, string> = {};
     let match;
     while ((match = pattern.exec(description)) !== null) {
-      tags[match[1]] = match[2].trim();
+      if (match[1] && match[2]) {
+        tags[match[1]] = match[2].trim();
+      }
     }
     return tags;
   },
@@ -236,18 +238,18 @@ export const TeamworkTaskHelpers = {
   },
 
   extractAppContext(task: TeamworkTask): string | undefined {
-    return task.tags.app;
+    return task.tags["app"];
   },
 
   getPreferredModel(task: TeamworkTask): ModelTypeValue {
-    const model = task.model || task.tags.model || "sonnet";
+    const model = task.model || task.tags["model"] || "sonnet";
     return model === "opus" || model === "sonnet" ? model : "sonnet";
   },
 
   shouldUseFullWorkflow(task: TeamworkTask): boolean {
     return (
       task.workflow_type === "plan" ||
-      task.tags.workflow === "plan" ||
+      task.tags["workflow"] === "plan" ||
       (task.task_prompt?.length ?? 0) > 500
     );
   },
@@ -282,7 +284,7 @@ export function formatTeamworkComment(update: TeamworkTaskUpdate): string {
     "Blocked": "🚫",
   };
 
-  const emoji = emojiMap[update.status || ""] || "ℹ️";
+  const emoji = (update.status ? emojiMap[update.status] : undefined) ?? "ℹ️";
   const timestamp = new Date().toISOString();
 
   const lines = [

@@ -32,7 +32,7 @@ export function parseJSON<T>(text: string, schema?: z.ZodType<T>): T | any {
   const match = text.match(codeBlockPattern);
 
   let jsonStr: string;
-  if (match) {
+  if (match && match[1]) {
     jsonStr = match[1].trim();
   } else {
     // No code block found, try to parse the entire text
@@ -154,35 +154,36 @@ export function formatWorktreeStatus(
  * @returns Record containing only required environment variables
  */
 export function getSafeSubprocessEnv(): Record<string, string> {
+  const env = process.env;
   const safeEnvVars: Record<string, string | undefined> = {
     // Anthropic Configuration (required)
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    ANTHROPIC_API_KEY: env["ANTHROPIC_API_KEY"],
 
     // GitHub Configuration (optional)
-    GITHUB_PAT: process.env.GITHUB_PAT,
+    GITHUB_PAT: env["GITHUB_PAT"],
 
     // Claude Code Configuration
-    CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH || "claude",
+    CLAUDE_CODE_PATH: env["CLAUDE_CODE_PATH"] || "claude",
     CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR:
-      process.env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR || "true",
+      env["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"] || "true",
 
     // Agent Cloud Sandbox Environment (optional)
-    E2B_API_KEY: process.env.E2B_API_KEY,
+    E2B_API_KEY: env["E2B_API_KEY"],
 
     // Cloudflare tunnel token (optional)
-    CLOUDFLARED_TUNNEL_TOKEN: process.env.CLOUDFLARED_TUNNEL_TOKEN,
+    CLOUDFLARED_TUNNEL_TOKEN: env["CLOUDFLARED_TUNNEL_TOKEN"],
 
     // Essential system environment variables
-    HOME: process.env.HOME,
-    USER: process.env.USER,
-    PATH: process.env.PATH,
-    SHELL: process.env.SHELL,
-    TERM: process.env.TERM,
-    LANG: process.env.LANG,
-    LC_ALL: process.env.LC_ALL,
+    HOME: env["HOME"],
+    USER: env["USER"],
+    PATH: env["PATH"],
+    SHELL: env["SHELL"],
+    TERM: env["TERM"],
+    LANG: env["LANG"],
+    LC_ALL: env["LC_ALL"],
 
     // Python-specific (for compatibility)
-    PYTHONPATH: process.env.PYTHONPATH,
+    PYTHONPATH: env["PYTHONPATH"],
     PYTHONUNBUFFERED: "1",
 
     // Working directory tracking
@@ -190,8 +191,8 @@ export function getSafeSubprocessEnv(): Record<string, string> {
   };
 
   // Add GH_TOKEN as alias for GITHUB_PAT if it exists
-  if (process.env.GITHUB_PAT) {
-    safeEnvVars.GH_TOKEN = process.env.GITHUB_PAT;
+  if (env["GITHUB_PAT"]) {
+    safeEnvVars["GH_TOKEN"] = env["GITHUB_PAT"];
   }
 
   // Filter out undefined values
@@ -219,16 +220,19 @@ export function truncateOutput(
     const lines = output.trim().split("\n");
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
-        const data = JSON.parse(lines[i]);
+        const line = lines[i];
+        if (!line) continue;
+        const data = JSON.parse(line);
         // Look for result message
-        if (data.type === "result" && data.result) {
+        if (data.type === "result" && typeof data.result === "string") {
           return truncateOutput(data.result, maxLength, suffix);
         }
         // Look for assistant message
         if (data.type === "assistant" && data.message?.content) {
           const content = data.message.content;
-          if (Array.isArray(content) && content[0]?.text) {
-            return truncateOutput(content[0].text, maxLength, suffix);
+          const text = Array.isArray(content) ? content[0]?.text : undefined;
+          if (text) {
+            return truncateOutput(text, maxLength, suffix);
           }
         }
       } catch {
@@ -303,7 +307,7 @@ export const logger = {
   },
 
   debug(message: string): void {
-    if (process.env.DEBUG) {
+    if (process.env["DEBUG"]) {
       console.log(`\x1b[90m🔍\x1b[0m ${message}`);
     }
   },
