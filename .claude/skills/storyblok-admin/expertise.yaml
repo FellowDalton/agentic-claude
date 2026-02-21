@@ -1,0 +1,393 @@
+# Storyblok Admin Expert
+# Space administration, user/role management, datasources, assets, and webhooks
+
+version: "1.1"
+last_updated: "2026-02-19"
+
+overview:
+  description: "Storyblok space administration including users, roles, datasources, assets, and webhooks"
+  primary_interface: "Storyblok Management API and Dashboard"
+  authentication: "Personal Access Token or OAuth app token"
+  api_base: "https://mapi.storyblok.com/v1"
+
+space_administration:
+  structure:
+    description: "Storyblok space hierarchy and organization"
+    elements:
+      - "Organization: Top-level container for multiple spaces"
+      - "Space: Individual CMS instance with content, components, and settings"
+      - "Folders: Organize stories within a space"
+      - "Stories: Content entries using component schemas"
+
+  settings:
+    general:
+      - "Space name and slug"
+      - "Default language"
+      - "Preview URLs"
+      - "API tokens (preview/public)"
+    security:
+      - "IP allowlisting"
+      - "Domain restrictions"
+      - "API rate limits"
+
+user_role_management:
+  roles:
+    built_in:
+      - name: "Owner"
+        permissions: "Full access, billing, space deletion"
+      - name: "Admin"
+        permissions: "Full content and settings, no billing"
+      - name: "Editor"
+        permissions: "Create, edit, publish content"
+      - name: "Author"
+        permissions: "Create and edit drafts only"
+    custom_roles:
+      description: "Define granular permissions per folder/component"
+      api_endpoint: "POST /v1/spaces/{space_id}/space_roles"
+      permissions:
+        - "can_create_stories"
+        - "can_edit_stories"
+        - "can_publish_stories"
+        - "can_delete_stories"
+        - "can_manage_assets"
+        - "can_manage_datasources"
+
+  user_management:
+    invite: "POST /v1/spaces/{space_id}/collaborators"
+    list: "GET /v1/spaces/{space_id}/collaborators"
+    remove: "DELETE /v1/spaces/{space_id}/collaborators/{id}"
+    update_role: "PUT /v1/spaces/{space_id}/collaborators/{id}"
+
+datasources:
+  description: "Centralized data stores for dropdowns, references, and shared data"
+  use_cases:
+    - "Country/region lists"
+    - "Category taxonomies"
+    - "Color palettes"
+    - "Reusable option sets"
+
+  api_endpoints:
+    list: "GET /v1/spaces/{space_id}/datasources"
+    create: "POST /v1/spaces/{space_id}/datasources"
+    get: "GET /v1/spaces/{space_id}/datasources/{id}"
+    update: "PUT /v1/spaces/{space_id}/datasources/{id}"
+    delete: "DELETE /v1/spaces/{space_id}/datasources/{id}"
+
+  entries:
+    list: "GET /v1/spaces/{space_id}/datasource_entries"
+    create: "POST /v1/spaces/{space_id}/datasource_entries"
+    bulk_create: "POST /v1/spaces/{space_id}/datasource_entries/bulk"
+    update: "PUT /v1/spaces/{space_id}/datasource_entries/{id}"
+    delete: "DELETE /v1/spaces/{space_id}/datasource_entries/{id}"
+
+  schema:
+    datasource:
+      name: "string (required)"
+      slug: "string (auto-generated)"
+      dimensions: "array of dimension objects"
+    entry:
+      name: "string (display label)"
+      value: "string (stored value)"
+      dimension_value: "string (for multi-dimensional)"
+
+asset_management:
+  description: "Digital asset management for images, files, and media"
+  features:
+    - "Automatic image optimization"
+    - "CDN delivery via Storyblok Image Service"
+    - "Folder organization"
+    - "Metadata and alt text"
+    - "Focal point setting"
+
+  api_endpoints:
+    list: "GET /v1/spaces/{space_id}/assets"
+    upload: "POST /v1/spaces/{space_id}/assets"
+    get: "GET /v1/spaces/{space_id}/assets/{id}"
+    update: "PUT /v1/spaces/{space_id}/assets/{id}"
+    delete: "DELETE /v1/spaces/{space_id}/assets/{id}"
+
+  upload_workflow:
+    steps:
+      - "POST to get signed upload URL"
+      - "PUT file to signed URL"
+      - "POST to finalize upload"
+    note: "Use SDK helpers for streamlined uploads"
+
+  folders:
+    list: "GET /v1/spaces/{space_id}/asset_folders"
+    create: "POST /v1/spaces/{space_id}/asset_folders"
+    update: "PUT /v1/spaces/{space_id}/asset_folders/{id}"
+    delete: "DELETE /v1/spaces/{space_id}/asset_folders/{id}"
+
+webhook_configuration:
+  description: "Event-driven notifications for content changes"
+  events:
+    story:
+      - "story.published"
+      - "story.unpublished"
+      - "story.deleted"
+      - "story.moved"
+    asset:
+      - "asset.created"
+      - "asset.replaced"
+      - "asset.deleted"
+    datasource:
+      - "datasource_entry.created"
+      - "datasource_entry.updated"
+      - "datasource_entry.deleted"
+    pipeline:
+      - "pipeline.deployed"
+
+  api_endpoints:
+    list: "GET /v1/spaces/{space_id}/webhook_endpoints"
+    create: "POST /v1/spaces/{space_id}/webhook_endpoints"
+    update: "PUT /v1/spaces/{space_id}/webhook_endpoints/{id}"
+    delete: "DELETE /v1/spaces/{space_id}/webhook_endpoints/{id}"
+    test: "POST /v1/spaces/{space_id}/webhook_endpoints/{id}/test"
+
+  schema:
+    name: "string (webhook name)"
+    endpoint: "string (URL to receive events)"
+    secret: "string (for signature verification)"
+    actions: "array of event types to trigger on"
+    activated: "boolean"
+
+  security:
+    signature_header: "webhook-signature"
+    verification: "HMAC-SHA1 of payload with secret"
+    best_practice: "Always verify signatures in production"
+
+content_migration:
+  multi_country_schema_audit:
+    story: "4-10"
+    audit_report: apps/migration/data/schema-audit-report.json
+    gaps_found: 4
+    gaps_resolved: 4
+    resolution_patterns:
+      - type: accepted_exception
+        name: sales_contact_list
+        reason: "Sub-entity type, data mapped within store_locator/contact_page"
+      - type: already_handled
+        name: multiple_push_documents
+        storyblok_component: document_card_grid
+        reason: "Schema exists, parser has rename + dedicated mapper"
+      - type: already_handled
+        name: aldes_banner
+        storyblok_component: service_banner
+        reason: "Schema exists, added parser rename + mapper in Story 4-10"
+      - type: already_handled
+        name: seo
+        storyblok_component: richtext_block
+        reason: "EN-only ezpage block with anchor+content attrs, maps to richtext_block"
+  schema_audit_accepted_exceptions:
+    description: "Gaps in cross-country audit that do not require new schemas"
+    field: acceptedExceptions
+    schema:
+      type: "content_type | block_type"
+      name: "Ibexa type name"
+      resolution: "accepted_exception | already_handled"
+      justification: "Why no new schema needed"
+      storyblokComponent: "Existing component name (if already_handled)"
+      references: "File paths and line numbers supporting the decision"
+  ibexa_dk_export_pruning:
+    strip_types: [product, category, product_extra, document, software, software_list, document_list, folder, news_list, site_configuration, nextpage_configuration, mailer_configuration, design_configuration, my_products]
+    cms_editorial_types: {editorial_page: 131, link: 44, news_page: 37, header_element: 3, news_category: 2, home: 1, store_locator: 1, header: 1, footer: 1, header_product: 1, faq: 1, multiple_push_item: 1, contact_bubble: 1}
+    total_stripped: 639
+    total_kept: 225
+    leaf_global_count: 52
+    dk_id_mapping_components: {link: 44, faq_item: 1, push_card: 1, news_category: 2, store_locator: 1, header: 1, footer: 1, contact_bubble: 1}
+    reference_resolver:
+      class: ReferenceResolver
+      path: apps/migration/src/transformer/reference-resolver.ts
+      input: "IDMapping (keyed by Ibexa remoteId MD5)"
+      output: "Storyblok UUID string or null"
+      methods: [resolve, resolveList, fromFile]
+      mapping_file: apps/migration/data/dk-id-mapping.json
+    ezpage_parser_integration:
+      function: "parseEzpageBlocks(ezpageData, resolver?, assetResolver?, videoLookup?)"
+      path: apps/migration/src/transformer/ezpage-parser.ts
+      resolver_usage: "multiple_push block resolves multi_push_item_list via ReferenceResolver.resolveList()"
+      block_type_map_count: 28
+      block_type_map_sample: {richtext: richtext_block, multiple_push: card_grid, simple_video: video, white_space: spacer, button_cta: button_cta, two_columns: two_columns, illustrated_benefits_new: illustrated_benefits}
+      note: "Expertise lists 7 of 28 mappings. Full list in ezpage-parser.ts BLOCK_TYPE_RENAMES constant."
+      new_mappings_story_4_10:
+        aldes_banner: service_banner
+        seo: richtext_block
+      richtext_asset_wiring:
+        story: "4-14"
+        description: "AssetResolver forwarded through richtext conversion chain so ezembed images in XML are resolved to Storyblok CDN URLs"
+        wired_functions:
+          - "tryConvertRichtext(value, assetResolver?) -> convertRichtext(value, assetResolver)"
+          - "mapRichtextBlock(attrs, assetResolver?) -> convertRichtext(xmlContent, assetResolver)"
+          - "mapTwoColumnsBlock(attrs, assetResolver?) -> tryConvertRichtext(content/rigth_content, assetResolver)"
+          - "mapIllustratedBenefitsBlock(attrs, resolver, assetResolver) -> tryConvertRichtext(introduction_richtext, assetResolver)"
+          - "mapLogoCardGridBlock(attrs, resolver, assetResolver) -> tryConvertRichtext(title, assetResolver)"
+          - "mapPhotoAdvantagesBlock(attrs, resolver, assetResolver) -> tryConvertRichtext(description, assetResolver)"
+        switch_callers_updated: [richtext, seo, two_columns, logo_multiple_push]
+        tests: "87 passed (7 new AC-4 tests)"
+
+asset_resolution:
+  asset_mapping_file:
+    location: "_bmad-output/implementation-artifacts/asset-url-mapping.json"
+    cli_flag: "--asset-mapping <path>"
+    note: "NOT in apps/migration/data/ - loaded via CLI flag"
+    entry_counts:
+      ibexaUri: 1157
+      contentId: 1345
+      damPath: 0
+    contentId_note: "contentId section now includes both original numeric content object IDs AND 154xxx node IDs mapped through dk-nodeid-mapping.json"
+  contentId_key_format:
+    actual: "numeric Ibexa content object IDs (e.g. 36623, 38127) AND numeric node IDs (e.g. 154392)"
+    ezcontent_lookup_fixed: true
+    note: "ezcontent:// refs in richtext use NODE IDs (location IDs), not content IDs. Resolution chain: nodeId -> dk-nodeid-mapping.json -> contentObjectId -> contentId map -> Storyblok URL. 58 of 81 154xxx node IDs resolved this way."
+  image_resolution_chain:
+    step_1: 'Content field has destinationContentId (numeric, e.g. 36623)'
+    step_2: 'Media YAML has imageId: 36623-XXXXX-1 with uri field'
+    step_3: 'ibexaUri mapping resolves URI to Storyblok URL'
+    fallback: 'Filename match from ibexaUri index'
+    theoretical_coverage_dk: '87.5% (147/168 image refs resolved)'
+    runtime_coverage_dk: '0% - extractString and contentId key mismatch block all resolution'
+    missing_pattern: 'Content IDs in 102xxx range - newer content not in media export'
+    leaf_global_coverage: '91% (10/11 unique image contentIds resolved)'
+    asset_resolver_validated: true  # chain logic correct, but inputs broken at runtime
+    fallback_chain_verified: [ibexaUri, contentId, damPath, filename, none]
+  extractString_gap:
+    accepts: [string, '{link: string}', null]
+    ibexa_image_format: '{destinationContentId: string|number, alternativeText: string, source: string|null}'
+    result: "returns null for all image fields - format not handled"
+    affected_transformers: [page-transformer, article-transformer]
+  dk_cms_image_field_counts:
+    imageasset: 174  # editorial_page, news_page, news_category
+    large_imageasset: 37  # editorial_page, news_page
+    pictoasset: 48  # link
+    non_null_refs: 212
+    null_refs: 454
+    pictoasset_gap: "NOT in PAGE_IMAGE_FIELDS, not resolved by page-transformer"
+  ezpage_asset_resolution:
+    image_field_resolution:
+      wired: true
+      runtime_broken: true
+      root_cause: "resolveAsset() constructs ezcontent://${contentId} but contentId map has descriptive keys not numeric"
+      affected_blocks: [illustrated_benefits, faq, infographic, photo_advantages, centered_image, button_cta]
+    richtext_inline_resolution:
+      wired: true
+      story: "4-14"
+      mechanism: "convertRichtext(xml, assetResolver) resolves ezembed xlink:href ezcontent:// refs to Storyblok CDN URLs"
+      affected_blocks: [richtext, seo, two_columns, "illustrated_benefits(introduction_richtext)", "logo_multiple_push(title)", "photo_list_advantage(description)"]
+      runtime_status: "depends on same contentId map -- will work when numeric keys are added"
+  three_step_chain:
+    description: "contentId -> media YAML imageId -> uri -> ibexaUri map"
+    step_1: 'content field destinationContentId (e.g. 39221)'
+    step_2: 'media YAML imageId 39221-396845-1 has uri field'
+    step_3: 'ibexaUri map resolves uri to Storyblok URL'
+    implemented: false
+    fix: 'build numeric contentId -> Storyblok URL index from media YAML at migration time'
+  leaf_global_image_stats:
+    image_refs_with_cid: 14
+    unique_content_ids: 11
+    resolved: 10
+    missing: 1  # cid=102538 news_category imageasset
+    null_image_fields: 96  # mostly link.pictoasset(38), news_page.large_imageasset(31)
+    content_refs_not_images: 44  # link.internal_link(30), editorial_page.cta_internal_url(6)
+  richtext_154xxx_resolution:
+    story: "4-15"
+    total_unique_refs: 81
+    resolved: 58
+    unresolved: 23
+    resolution_chain: "ezcontent://NODEID -> dk-nodeid-mapping.json -> contentObjectId -> asset-url-mapping.json contentId -> Storyblok URL"
+    critical_insight: "ezcontent:// hrefs in richtext XML are NODE IDs (Ibexa location IDs), NOT content object IDs. The nodeId->contentObjectId mapping in dk-nodeid-mapping.json is required."
+    unresolved_reason: "23 node IDs not in dk-nodeid-mapping.json and not in any of 5 media YAML exports (DK/DE/NO/SE/COM). Likely created after export."
+    artifacts:
+      resolved_added_to: "_bmad-output/implementation-artifacts/asset-url-mapping.json (contentId section)"
+      unresolved_documented_in: "apps/migration/data/dk-unresolved-images.json"
+    non_image_embeds: 0
+  dk_alt_text_lookup:
+    story: "4-15"
+    artifact: "apps/migration/data/dk-alt-text-lookup.json"
+    source: "ibexa-export/media_Exhausto-DK.yml"
+    stats:
+      total_images: 789
+      image_fields_processed: 792
+      with_alt_text: 689
+      without_alt_text: 103
+      unique_content_ids_with_alt: 685
+      unique_uris_with_alt: 684
+    structure:
+      byContentId: "numeric contentId -> alternativeText string"
+      byIbexaUri: "full Ibexa asset URI -> alternativeText string"
+    language_preference: "dan-DK preferred over eng-GB when both exist"
+    consumed_by: "Task 11 (integrate-alt-text) will load this into AssetResolver"
+
+best_practices:
+  user_management:
+    - "Use custom roles for granular permissions"
+    - "Regularly audit collaborator access"
+    - "Remove inactive users promptly"
+    - "Use SSO where available"
+
+  datasources:
+    - "Keep datasources focused and single-purpose"
+    - "Use dimensions for localized values"
+    - "Version control datasource definitions"
+    - "Document datasource usage in component schemas"
+
+  assets:
+    - "Use consistent folder structure"
+    - "Always set alt text for accessibility"
+    - "Leverage image service for optimization"
+    - "Set focal points for important images"
+
+  webhooks:
+    - "Always verify webhook signatures"
+    - "Implement idempotent handlers"
+    - "Log webhook payloads for debugging"
+    - "Use retry logic for failed deliveries"
+    - "Set up monitoring for webhook failures"
+
+common_pitfalls:
+  - "Not setting up proper role permissions before inviting users"
+  - "Forgetting to activate webhooks after creation"
+  - "Not verifying webhook signatures in production"
+  - "Using preview tokens for management operations"
+  - "Not organizing assets into folders early"
+  - "Creating overlapping datasources"
+
+environment_vars:
+  STORYBLOK_MANAGEMENT_TOKEN: "Personal Access Token for Management API"
+  STORYBLOK_SPACE_ID: "Target space ID"
+  STORYBLOK_WEBHOOK_SECRET: "Secret for webhook signature verification"
+
+content_deletion:
+  dk_cms_clean_slate:
+    executed: "2026-02-16"
+    space: "289734456144790 (EXHAUSTO Prod)"
+    method: "DELETE /v1/spaces/{space_id}/stories/{storyblok_id} per ID mapping entry"
+    results:
+      total_entries: 52
+      deleted: 0
+      skipped_404: 52  # all previously deleted
+      failed: 0
+    straggler_sweep: "dk/shared/ and dk/global/ both clean - 0 stories"
+    folders_deleted: "all CMS subfolders already gone"
+    pim_preserved: "dk/produkter/ (products), dk/service-support/ intact (18 stories total under dk/)"
+    notes:
+      - "PIM content uses Danish slugs (dk/produkter/ not dk/products/)"
+      - "Python 3.14 on macOS has SSL cert issues - use curl for MAPI calls"
+      - "Rate limit 340ms between DELETE calls is safe (6 req/s limit)"
+      - "404 on DELETE = already gone, safe to skip"
+
+  asset_resolution_gap:
+    discovered: "2026-02-16"
+    updated: "2026-02-17"
+    see_also: "asset_resolution section for full breakdown"
+    summary: "Two compounding failures: extractString rejects image objects, contentId map uses descriptive keys not numeric IDs"
+    runtime_coverage: "0% - all image fields return null"
+    fix: "build numeric contentId -> Storyblok URL index from media YAML at migration time"
+
+api_rate_limits:
+  management_api:
+    rate: "6 requests per second"
+    burst: "36 requests"
+  content_delivery:
+    rate: "100 requests per second"
+  note: "Use caching and batch operations to stay within limits"

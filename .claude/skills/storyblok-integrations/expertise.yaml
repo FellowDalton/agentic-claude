@@ -1,0 +1,387 @@
+# Storyblok Integrations Expert
+# External API integrations, webhook handlers, Management API, data sync, and cron jobs
+
+version: "1.1"
+last_updated: "2026-02-13"
+
+overview:
+  description: "Storyblok integration patterns for external systems, data sync, and automation"
+  primary_apis:
+    - "Content Delivery API: Read-only content access"
+    - "Management API: Full CRUD operations"
+  common_integrations:
+    - "PIM systems (Nextpage PIM via Ibexa CMS)"
+    - "Search (Algolia, Elasticsearch)"
+    - "Analytics and personalization"
+
+management_api:
+  base_url: "https://mapi.storyblok.com/v1"
+  authentication:
+    header: "Authorization: {personal_access_token}"
+    note: "No Bearer prefix — raw token in Authorization header"
+
+  rate_limits:
+    requests_per_second: 3
+    delay_ms: 340
+    configurable: true
+    constructor_option: "new StoryblokManagementClient(token, spaceId, { rateLimitMs: 0 })"
+
+  key_endpoints:
+    stories:
+      create: "POST /v1/spaces/{space_id}/stories"
+      read: "GET /v1/spaces/{space_id}/stories/{id}"
+      update: "PUT /v1/spaces/{space_id}/stories/{id}"
+      delete: "DELETE /v1/spaces/{space_id}/stories/{id}"
+      publish: "GET /v1/spaces/{space_id}/stories/{id}/publish"
+      unpublish: "GET /v1/spaces/{space_id}/stories/{id}/unpublish"
+
+    components:
+      list: "GET /v1/spaces/{space_id}/components"
+      create: "POST /v1/spaces/{space_id}/components"
+      update: "PUT /v1/spaces/{space_id}/components/{id}"
+      delete: "DELETE /v1/spaces/{space_id}/components/{id}"
+
+    assets:
+      upload_request: "POST /v1/spaces/{space_id}/assets"
+      finalize: "POST /v1/spaces/{space_id}/assets/{id}/finish_upload"
+
+    assets_extended:
+      sign: "POST /v1/spaces/{space_id}/assets { filename, size } -> { fields, post_url, id, pretty_url }"
+      upload: "POST {post_url} FormData with signed fields + file blob, expect 204"
+      search: "GET /v1/spaces/{space_id}/assets?search={filename} then filter for exact match"
+
+    folders:
+      create: "POST /v1/spaces/{space_id}/stories/ with { story: { name, slug, is_folder: true, parent_id, default_root } }"
+      search: "GET /v1/spaces/{space_id}/stories/?by_slugs={path}&is_folder=true"
+      ensure: "search first, create only if not found"
+
+  story_payload:
+    structure:
+      story:
+        name: "Story name"
+        slug: "url-slug"
+        content:
+          component: "page"
+          body: []
+        parent_id: "Parent folder ID (optional)"
+        is_folder: false
+        publish: true
+
+webhook_handlers:
+  description: "Process Storyblok events in your application"
+
+  implementation_pattern:
+    framework: "Next.js API route"
+    code: |
+      // app/api/storyblok/webhook/route.ts
+      import crypto from 'crypto'
+
+      export async function POST(request: Request) {
+        const body = await request.text()
+        const signature = request.headers.get('webhook-signature')
+
+        // Verify signature
+        const expected = crypto
+          .createHmac('sha1', process.env.STORYBLOK_WEBHOOK_SECRET!)
+          .update(body)
+          .digest('hex')
+
+        if (signature !== expected) {
+          return Response.json({ error: 'Invalid signature' }, { status: 401 })
+        }
+
+        const payload = JSON.parse(body)
+
+        switch (payload.action) {
+          case 'published':
+            await handlePublish(payload)
+            break
+          case 'unpublished':
+            await handleUnpublish(payload)
+            break
+          case 'deleted':
+            await handleDelete(payload)
+            break
+        }
+
+        return Response.json({ received: true })
+      }
+
+  payload_structure:
+    action: "published | unpublished | deleted | moved"
+    story_id: "number"
+    full_slug: "string"
+    space_id: "number"
+    text_status: "string"
+
+  common_handlers:
+    cache_invalidation:
+      description: "Clear CDN cache on publish"
+      actions:
+        - "Trigger Next.js revalidation"
+        - "Purge CDN cache"
+        - "Update search index"
+
+    search_index_sync:
+      description: "Keep search index updated"
+      on_publish: "Index or update document"
+      on_unpublish: "Remove from index"
+      on_delete: "Remove from index"
+
+    notification:
+      description: "Alert team on content changes"
+      channels:
+        - "Slack webhook"
+        - "Email notification"
+        - "Custom logging"
+
+data_sync_patterns:
+  pim_integration:
+    system: Nextpage PIM via Ibexa CMS
+    countries: [EN, DK, DE, NO, SE]
+    languages: [eng-GB, dan-DK, ger-DE, nor-NO, swe-SE]
+    product_fields: 29
+    total_products: 327
+    dk_dual_language: true
+    dk_eng_gb_is_french_fallback: true
+
+    workflow:
+      - "Fetch products from PIM API"
+      - "Transform to Storyblok story format"
+      - "Upsert via Management API"
+      - "Handle images/assets separately"
+
+    field_categories:
+      computed_not_from_pim: [title, short_title, reference, iddoctrine, tags, seo, picture, is_section, sections, product_extra]
+      never_populated: [tags, seo, picture, DC_P_LIEN_TELECHARGEMENTS_TECHNIQUES_EXHAUSTO, DC_P_LIEN_NOTICES_INSTALLATION_EXHAUSTO, url_picture_partner_logo]
+      always_populated: [title, iddoctrine, reference, is_section]
+
+    value_formats:
+      reference_separator: '\r (carriage return, NOT \n)'
+      reference_field_separator: ' || '
+      dam_path_format: 'Exhausto_Catalog\Photos product\{series}\{filename}.png'
+      empty_relation: 'destinationContentIds: {} (hash, not array)'
+      eztags_structure: '{id, parent_id, keywords: {lang: label}, remote_id}'
+
+    anomalies:
+      de_richer_data: 'DE has 87 products, higher population rates for SEARCH_REFERENCES (52% vs 12%), DC_P_ALDESCADLIBRARY (48% vs 15%)'
+      dk_french_fallback: 'eng-GB in DK contains French text, not English'
+      vex4000_sections: 'VEX4000 parent product has ~12-13 is_section=true children across all 5 countries'
+      title_mirroring: 'title <- DC_P_NOMPRODUIT, short_title <- DC_P_CATEGORIEPRODUIT (computed during original PHP sync)'
+
+    load_pipeline:
+      phases: [bootstrap_folders, categories, products, ranges, images]
+      sequence: 'folders -> categories -> QG -> products -> QG -> ranges -> QG -> images'
+      quality_gates:
+        formula: '(created + updated + skipped) / inputCount >= threshold'
+        defaults: {categories: 0.9, products: 0.9, ranges: 0.9, images: 0.8}
+        on_fail: 'abort remaining phases, set abortedAtPhase in report'
+      counts_invariant: 'inputCount === created + updated + skipped + failed'
+
+    folder_bootstrap:
+      structure:
+        - '/{country}/ (root folder)'
+        - '/{country}/categories/ (default_root: product_category)'
+        - '/{country}/products/ (default_root: product)'
+        - '/{country}/ranges/ (default_root: product_range)'
+      method: 'storyblokClient.ensureFolder(parentId, name, slug, defaultRoot)'
+      idempotent: true
+
+    upsert_pattern:
+      search: 'GET /stories/?with_fieldtype=external_id&external_id={id}'
+      create: 'POST /stories/ with story.external_id set'
+      update: 'PUT /stories/{id} without external_id in body'
+      detect_action: 'response.story.external_id present = create, absent = update'
+
+    element_type_filtering:
+      categories: [1, 7]
+      products: [2, 8]
+      ranges: [3, 9]
+      category_sort: 'topological BFS by ParentExtID — parents before children'
+      range_prefix: 'PR_ prefix on external_id for ranges'
+
+    continue_on_error:
+      pattern: 'for (const element of elements) { try { upsert } catch (err) { errors.push({phase, extId, code, message}); failed++ } }'
+      orchestrator: 'never throws, wraps entire execution in try/catch'
+      error_type: 'LoadItemError { phase, extId, code, message }'
+
+    image_deferral:
+      reason: 'DAM paths are Windows backslash paths, not HTTP URLs'
+      example: 'Exhausto_Catalog\Photos product\VEX1000 series\VEX1000RS.png'
+      stub_behavior: 'returns LoadPhaseResult with skipped=inputCount, created=0'
+      follow_up: 'Story 5.3b'
+
+    category_linking:
+      cache_type: 'Map<string, {storyId: number, uuid: string}>'
+      product_field: 'DC_P_CATEGORIEPRODUIT (can be TypeValue 0 standard or TypeValue 2 multivalo)'
+      fallback: 'element.ParentExtID if DC_P_CATEGORIEPRODUIT not in cache'
+      resolved_as: 'content.category = uuid string'
+
+    example_sync:
+      code: |
+        async function syncProduct(product: PIMProduct) {
+          const existingStory = await findStoryByExternalId(product.id)
+
+          const storyPayload = {
+            story: {
+              name: product.name,
+              slug: product.slug,
+              content: {
+                component: 'product',
+                external_id: product.id,
+                title: product.name,
+                description: product.description,
+                price: product.price,
+                images: await syncImages(product.images),
+              }
+            }
+          }
+
+          if (existingStory) {
+            await mapi.put(`/stories/${existingStory.id}`, storyPayload)
+          } else {
+            await mapi.post('/stories', storyPayload)
+          }
+        }
+
+  ecommerce_integration:
+    shopify:
+      description: "Sync Shopify products to Storyblok"
+      approach:
+        - "Use Shopify webhooks for real-time sync"
+        - "Store Shopify product ID in Storyblok story"
+        - "Enrich with editorial content in Storyblok"
+
+  search_integration:
+    algolia:
+      description: "Index Storyblok content in Algolia"
+      workflow:
+        - "Webhook triggers on publish"
+        - "Fetch full story content"
+        - "Transform to search document"
+        - "Push to Algolia index"
+
+cron_jobs:
+  description: "Scheduled tasks for Storyblok automation"
+
+  use_cases:
+    content_freshness:
+      description: "Check for stale content"
+      schedule: "Daily"
+      action: "Alert on content not updated in X days"
+
+    bulk_sync:
+      description: "Full sync from external system"
+      schedule: "Nightly"
+      action: "Reconcile all products/content"
+
+    scheduled_publishing:
+      description: "Publish content at scheduled time"
+      schedule: "Every 15 minutes"
+      action: "Check and publish scheduled stories"
+
+  implementation:
+    vercel_cron:
+      description: "Serverless cron via Vercel"
+      config: |
+        // vercel.json
+        {
+          "crons": [{
+            "path": "/api/cron/sync-products",
+            "schedule": "0 2 * * *"
+          }]
+        }
+
+    external_scheduler:
+      options:
+        - "AWS EventBridge"
+        - "Google Cloud Scheduler"
+        - "GitHub Actions scheduled workflows"
+
+batch_operations:
+  description: "Efficient bulk content operations"
+
+  rate_limit_handling:
+    code: |
+      async function batchProcess<T>(
+        items: T[],
+        processor: (item: T) => Promise<void>,
+        ratePerSecond = 3
+      ) {
+        const delay = 1000 / ratePerSecond
+
+        for (const item of items) {
+          await processor(item)
+          await sleep(delay)
+        }
+      }
+
+  bulk_publish:
+    description: "Publish multiple stories"
+    approach: "Queue with rate limiting"
+    note: "No bulk publish endpoint, must iterate"
+
+  bulk_update:
+    description: "Update multiple stories"
+    approach: "Batch with error handling and retry"
+
+error_handling:
+  api_errors:
+    401: "Invalid or expired token"
+    404: "Story/resource not found"
+    422: "Validation error in payload"
+    429: "Rate limit exceeded"
+
+  retry_strategy:
+    code: |
+      async function withRetry<T>(
+        fn: () => Promise<T>,
+        maxRetries = 3
+      ): Promise<T> {
+        for (let i = 0; i < maxRetries; i++) {
+          try {
+            return await fn()
+          } catch (error: any) {
+            if (error.response?.status === 429) {
+              await sleep(Math.pow(2, i) * 1000)
+              continue
+            }
+            throw error
+          }
+        }
+        throw new Error('Max retries exceeded')
+      }
+
+best_practices:
+  - "Always verify webhook signatures"
+  - "Implement idempotent sync operations"
+  - "Use external_id fields to track source records"
+  - "Log all API operations for debugging"
+  - "Handle rate limits with exponential backoff"
+  - "Queue bulk operations, don't process inline"
+  - "Use draft version for sync, publish explicitly"
+  - "Implement dead letter queue for failed syncs"
+
+common_pitfalls:
+  - "Not handling rate limits (429 errors)"
+  - "Sync loops from bidirectional updates"
+  - "Missing error handling in webhooks"
+  - "Not using idempotent operations"
+  - "Blocking webhook response with long operations"
+  - "Not validating webhook signatures"
+
+environment_vars:
+  STORYBLOK_MANAGEMENT_TOKEN: "Personal Access Token for Management API"
+  STORYBLOK_SPACE_ID: "Target space ID"
+  STORYBLOK_WEBHOOK_SECRET: "Webhook signature verification"
+  PIM_BASE_URL: "Nextpage PIM API base URL"
+  PIM_USERNAME: "PIM authentication username"
+  PIM_PASSWORD: "PIM authentication password"
+
+monitoring:
+  recommendations:
+    - "Track sync success/failure rates"
+    - "Alert on webhook delivery failures"
+    - "Monitor API rate limit usage"
+    - "Log all Management API mutations"
+    - "Set up error alerting for failed syncs"

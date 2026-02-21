@@ -1,0 +1,118 @@
+# Sprint Reporter Expertise
+version: "1.0"
+last_updated: "2026-02-21"
+
+overview:
+  description: "Generates rich sprint completion reports and voice guides for human reviewers at the end of build_w_team"
+  outputs:
+    written: ".sprint_report.md in worktree root"
+    voice: ".sprint_voice.txt in worktree root"
+  invoked_by: "build_w_team.md Step 6.7, or standalone via /skills:sprint-reporter:report"
+
+report_structure:
+  sections:
+    - header: "Story ID, title, separator lines"
+    - summary: "2-3 sentences on what was built and why"
+    - architecture: "ASCII box diagram showing new/changed components and data flow"
+    - key_changes: "Categorized file list with NEW/MOD/DEL tags and short descriptions"
+    - how_to_test: "Step-by-step manual testing with commands, URLs, expected behavior"
+    - acceptance_criteria: "Checklist with [x]/[ ] status from the plan"
+    - team: "Who did what (member name, agent type, task summary)"
+    - pr_description: "Ready-to-paste PR body (Summary + Test Plan)"
+
+file_categorization:
+  rules:
+    - pattern: "src/components/**"
+      category: "Components"
+    - pattern: "src/app/** OR src/pages/**"
+      category: "Routes & Pages"
+    - pattern: "src/lib/** OR src/utils/**"
+      category: "Libraries & Utilities"
+    - pattern: "src/api/** OR src/services/**"
+      category: "API & Services"
+    - pattern: "tests/** OR **/*.test.* OR **/*.spec.*"
+      category: "Tests"
+    - pattern: ".claude/** OR .github/** OR config/**"
+      category: "Tooling & Config"
+    - pattern: "**/*.css OR **/*.scss OR **/*.module.css"
+      category: "Styles"
+    - pattern: "**"
+      category: "Other"
+  display:
+    new_file: "NEW"
+    modified_file: "MOD"
+    deleted_file: "DEL"
+    renamed_file: "REN"
+    max_files_shown: 20
+    overflow_message: "... and {n} more files"
+
+ascii_diagrams:
+  style: "box-drawing characters (single-line: ─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼)"
+  arrow: "──>"
+  guidelines:
+    - "Max width 60 chars for terminal readability"
+    - "Show only new/changed components, not the entire system"
+    - "Use labels inside boxes, keep them short"
+    - "Show data flow direction with arrows"
+    - "Group related components vertically"
+  templates:
+    data_flow: |
+      ┌──────────┐     ┌──────────┐     ┌──────────┐
+      │ Source   │────>│ Process  │────>│ Target   │
+      └──────────┘     └──────────┘     └──────────┘
+    component_tree: |
+      Page
+      ├── Layout
+      │   ├── Header
+      │   └── Navigation
+      └── Content
+          ├── ComponentA
+          └── ComponentB
+
+testing_guide:
+  url_patterns:
+    frontend: "http://localhost:{port}/{path}"
+    api_endpoint: "http://localhost:{port}/api/{path}"
+  common_commands:
+    build: "npm run build"
+    test: "npm run test"
+    typecheck: "npx tsc --noEmit"
+    lint: "npm run lint"
+    dev: "npm run dev -- --port {port}"
+  port_source: ".ports.env in worktree root"
+
+voice_presentation:
+  tone: "conversational, confident, concise"
+  target_duration: "20-40 seconds"
+  structure:
+    - "Open with what was built (1 sentence)"
+    - "Key changes (count + highlights, no full file paths)"
+    - "How to test (simplified, action-oriented)"
+    - "Acceptance criteria result (pass count)"
+    - "Any blockers or concerns"
+  skip_sections:
+    - "architecture diagram (ASCII art)"
+    - "raw file lists (summarize counts instead)"
+    - "team member details"
+    - "PR description"
+  speak_naturally:
+    file_paths: "abbreviate to filename only (e.g., 'the sync module' not 'src/lib/sync.ts')"
+    numbers: "spell out for story IDs (e.g., 'story five-three' not 'story 5.3')"
+    ports: "say 'port three thousand one' not 'port 3001'"
+    checkmarks: "'all five criteria passed' not '[x] [x] [x] [x] [x]'"
+    acronyms: "spell out first use (e.g., 'API, the Application Programming Interface')"
+  avoid:
+    - "Reading code snippets or commands"
+    - "Spelling out URLs character by character"
+    - "Listing every file that changed"
+    - "Technical jargon without context"
+    - "Filler words like 'basically', 'essentially', 'actually'"
+
+tts_integration:
+  note: "TTS is optional. Configure your project's TTS script path here."
+  input_method: "--file path/to/.sprint_voice.txt"
+  max_chars: 2000
+
+key_files:
+  build_command: ".claude/commands/build_w_team.md"
+  plan_command: ".claude/commands/plan_w_team.md"

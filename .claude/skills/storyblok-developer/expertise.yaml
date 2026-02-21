@@ -1,0 +1,265 @@
+# Storyblok Developer Expert
+# SDK integration, Visual Editor, Bridge setup, field plugins, component registration, Content Delivery API
+
+version: "1.0"
+last_updated: "2026-02-05"
+
+overview:
+  description: "Storyblok frontend SDK integration for React/Next.js with Visual Editor support"
+  primary_sdk: "@storyblok/react"
+  visual_editor: "Real-time preview editing within Storyblok dashboard"
+  api_type: "REST-based Content Delivery API with CDN caching"
+
+sdk_integration:
+  installation:
+    command: "npm install @storyblok/react"
+    peer_deps:
+      - "react"
+      - "react-dom"
+
+  initialization:
+    description: "Initialize Storyblok SDK at app root"
+    code: |
+      import { storyblokInit, apiPlugin } from '@storyblok/react'
+
+      storyblokInit({
+        accessToken: process.env.STORYBLOK_TOKEN,
+        use: [apiPlugin],
+        components: {
+          page: Page,
+          hero: Hero,
+          feature_section: FeatureSection,
+        },
+        bridge: true, // Enable Visual Editor
+      })
+    notes:
+      - "Component keys must match Storyblok block names exactly"
+      - "Use snake_case matching Storyblok component names"
+      - "Initialize once at app entry point"
+
+  hooks:
+    useStoryblok:
+      purpose: "Fetch and enable live editing for a story"
+      usage: |
+        const story = useStoryblok(slug, { version: 'draft' })
+      params:
+        slug: "Story path or uuid"
+        options: "API options (version, resolve_relations, etc.)"
+      returns: "Story object with live updates in Visual Editor"
+
+    useStoryblokState:
+      purpose: "Enable live editing for pre-fetched story"
+      usage: |
+        const liveStory = useStoryblokState(initialStory)
+      note: "Use when story is fetched server-side"
+
+visual_editor:
+  description: "Real-time preview editing within Storyblok dashboard"
+  requirements:
+    - "Bridge script loaded"
+    - "Components use StoryblokComponent or storyblokEditable"
+    - "Preview URL configured in space settings"
+
+  bridge_setup:
+    script_inclusion: "Automatic when bridge: true in storyblokInit"
+    manual: |
+      <script src="//app.storyblok.com/f/storyblok-v2-latest.js"></script>
+    events:
+      - "input: Content field changed"
+      - "published: Story published"
+      - "unpublished: Story unpublished"
+      - "enterEditmode: Editor activated"
+
+  editable_directive:
+    purpose: "Mark elements as editable in Visual Editor"
+    usage: |
+      import { storyblokEditable } from '@storyblok/react'
+
+      const Hero = ({ blok }) => (
+        <section {...storyblokEditable(blok)}>
+          <h1>{blok.title}</h1>
+        </section>
+      )
+    attributes_added:
+      - "data-blok-c: Component identifier"
+      - "data-blok-uid: Unique block ID"
+    note: "Spread on outermost element of component"
+
+  StoryblokComponent:
+    purpose: "Auto-render registered components"
+    usage: |
+      import { StoryblokComponent } from '@storyblok/react'
+
+      const Page = ({ blok }) => (
+        <main {...storyblokEditable(blok)}>
+          {blok.body?.map((nestedBlok) => (
+            <StoryblokComponent blok={nestedBlok} key={nestedBlok._uid} />
+          ))}
+        </main>
+      )
+    behavior: "Looks up component by blok.component name"
+
+component_registration:
+  description: "Map Storyblok blocks to React components"
+  patterns:
+    static_registration:
+      description: "Define all components at init"
+      code: |
+        storyblokInit({
+          components: {
+            page: Page,
+            hero: Hero,
+            cta: CallToAction,
+          }
+        })
+      pros: "Simple, tree-shakeable"
+      cons: "All components loaded upfront"
+
+    dynamic_registration:
+      description: "Register components after init"
+      code: |
+        import { registerComponent } from '@storyblok/react'
+        registerComponent('dynamic_block', DynamicBlock)
+      use_case: "Lazy-loaded or conditional components"
+
+  naming_convention:
+    storyblok: "snake_case (e.g., feature_section)"
+    react: "PascalCase (e.g., FeatureSection)"
+    mapping: "storyblokInit({ components: { feature_section: FeatureSection } })"
+
+content_delivery_api:
+  base_url: "https://api.storyblok.com/v2/cdn"
+  authentication: "Access token in query param or header"
+
+  endpoints:
+    stories:
+      list: "GET /stories"
+      single: "GET /stories/{slug}"
+      by_uuid: "GET /stories/{uuid}"
+    links: "GET /links"
+    tags: "GET /tags"
+    datasources: "GET /datasources"
+    datasource_entries: "GET /datasource_entries"
+
+  common_params:
+    version: "draft | published"
+    resolve_relations: "component.field,component.field"
+    resolve_links: "url | story | uuid"
+    language: "ISO language code"
+    fallback_lang: "Fallback language"
+    cv: "Cache version (timestamp)"
+    per_page: "Pagination limit (max 100)"
+    page: "Pagination page"
+
+  filtering:
+    starts_with: "Filter by slug prefix"
+    by_uuids: "Fetch multiple by UUID"
+    by_slugs: "Fetch multiple by slug"
+    with_tag: "Filter by tag"
+    filter_query: "Advanced field filtering"
+
+  filter_query_examples:
+    equals: "filter_query[field][in]=value"
+    contains: "filter_query[field][like]=*value*"
+    greater_than: "filter_query[field][gt_int]=10"
+    in_array: "filter_query[field][in_array]=value"
+
+  caching:
+    cdn_cache: "Automatic on published content"
+    cache_invalidation: "Webhook on publish or cv param"
+    draft_content: "Never cached (version=draft)"
+
+field_plugins:
+  description: "Custom field types for Storyblok editor"
+  use_cases:
+    - "Custom color pickers"
+    - "External data selectors"
+    - "Complex input widgets"
+    - "Integration-specific fields"
+
+  development:
+    cli_command: "npx @storyblok/field-plugin-cli"
+    structure:
+      - "index.html: Plugin entry"
+      - "main.js: Plugin logic"
+      - "manifest.json: Configuration"
+
+  api:
+    getFieldValue: "Get current field value"
+    setFieldValue: "Update field value"
+    getContext: "Get editor context"
+    onStateChange: "Subscribe to changes"
+
+  deployment:
+    options:
+      - "Hosted: Deploy to your server"
+      - "Storyblok: Upload to space assets"
+    registration: "Add via space settings > Field Types"
+
+nextjs_integration:
+  app_router:
+    server_components:
+      description: "Fetch stories in Server Components"
+      code: |
+        // app/[...slug]/page.tsx
+        import { getStoryblokApi } from '@storyblok/react/rsc'
+
+        export default async function Page({ params }) {
+          const { data } = await getStoryblokApi().get(
+            `cdn/stories/${params.slug.join('/')}`,
+            { version: 'draft' }
+          )
+          return <StoryblokStory story={data.story} />
+        }
+
+    client_components:
+      description: "Enable live editing in Client Components"
+      code: |
+        'use client'
+        import { useStoryblokState } from '@storyblok/react'
+
+        export default function LivePreview({ story }) {
+          const liveStory = useStoryblokState(story)
+          return <StoryblokComponent blok={liveStory.content} />
+        }
+
+  draft_preview:
+    setup:
+      - "Configure preview URL in Storyblok settings"
+      - "Add preview mode API route"
+      - "Use version: 'draft' for preview requests"
+    preview_url_format: "https://yoursite.com/api/preview?secret=xxx&slug={slug}"
+
+best_practices:
+  - "Always use storyblokEditable for clickable areas in editor"
+  - "Map component names exactly (snake_case in storyblokInit)"
+  - "Use resolve_relations sparingly (max 2 levels)"
+  - "Implement ISR for static pages with revalidation"
+  - "Handle missing components gracefully"
+  - "Use TypeScript with generated types from CLI"
+  - "Separate draft/published logic clearly"
+
+common_pitfalls:
+  - "Component name mismatch (PascalCase vs snake_case)"
+  - "Missing storyblokEditable on component wrapper"
+  - "Not initializing SDK before rendering"
+  - "Forgetting version: 'draft' for preview"
+  - "Over-fetching with resolve_relations"
+  - "Not handling Visual Editor bridge events"
+
+environment_vars:
+  STORYBLOK_TOKEN: "Preview/public access token"
+  STORYBLOK_PREVIEW_SECRET: "Secret for preview mode"
+  NEXT_PUBLIC_STORYBLOK_TOKEN: "Client-side token (if needed)"
+
+type_safety:
+  description: "TypeScript integration with Storyblok"
+  workflow:
+    - "Pull components: storyblok components pull --space <id>"
+    - "Generate types: storyblok types generate --space <id>"
+    - "Import in components: import { HeroStoryblok } from './component-types'"
+  generic_usage: |
+    interface Props {
+      blok: HeroStoryblok
+    }
+    const Hero: React.FC<Props> = ({ blok }) => { ... }

@@ -1,0 +1,343 @@
+# Ibexa Format Expertise
+# Ibexa CMS export format — YAML structure for content types, location trees, field types, media references, and multi-site content organization
+# Last validated: 2026-02-16
+
+domain: ibexa-format
+purpose: Ibexa CMS export format — YAML structure for content types, location trees, field types, media references, and multi-site content organization
+
+scope:
+  - ibexa-export/ directory — all YAML content and media export files
+  - Content type definitions (content_type.yml)
+  - Per-country content exports (content_*.yml)
+  - Per-country media exports (media_*.yml)
+  - Multi-site organization (DK, DE, NO, SE, COM)
+  - Product structure and PIM field mappings
+
+core_patterns:
+  content_export_structure:
+    description: Top-level YAML array of content entries
+    schema:
+      type: content
+      mode: create
+      metadata:
+        contentType: "<content_type_identifier>"
+        mainTranslation: "<lang_code>"
+        creatorId: "<int>"
+        modificationDate: "<ISO-8601>"
+        publicationDate: "<ISO-8601>"
+        remoteId: "<uuid-hex>"
+        alwaysAvailable: "<bool>"
+        section:
+          id: "<int>"
+          identifier: "<standard|media>"
+      location:
+        parentLocationId: "<int>"
+        parentLocationRemoteId: "<uuid-hex>"
+        locationRemoteId: "<uuid-hex>"
+        hidden: "<bool>"
+        sortField: "<int>"
+        sortOrder: "<int>"
+        priority: "<int>"
+      fields: "<array of field entries>"
+      references: "<array of reference entries>"
+
+  content_type_definition:
+    description: Content type definitions in content_type.yml
+    schema:
+      type: content_type
+      mode: create
+      metadata:
+        identifier: "<type_name>"
+        mainTranslation: eng-GB
+        nameSchema: "<field_expression>"
+        container: "<bool>"
+        contentTypeGroups: ["Content"]
+        translations:
+          eng-GB:
+            name: "<display_name>"
+      fields: "<array of field definitions>"
+      references: "<array of type references>"
+    content_types_found:
+      - article
+      - ber_simulator
+      - category
+      - contact_bubble
+      - contact_page_new
+      - content_link
+      - design_configuration
+      - document
+      - document_list
+      - editorial_page
+      - faq
+      - folder
+      - footer
+      - form
+      - header
+      - header_element
+      - header_product
+      - home
+      - link
+      - link_label
+      - mailer_configuration
+      - multiple_push_document
+      - multiple_push_item
+      - my_products
+      - news_category
+      - news_list
+      - news_page
+      - nextpage_configuration
+      - product
+      - product_extra
+      - product_range
+      - product_thumbnail
+      - sales_contact_list
+      - site_configuration
+      - software_list
+      - store
+      - store_locator
+      - youtube_video
+      - youtube_video_list
+      - sales_contact
+      - contact_filter
+      - contact_page
+      - customer_journey
+      - customer_profile
+      - forceplus_form_page
+      - frequent_question
+      - landing_page
+      - online_resource
+      - other_contact
+      - pdr
+      - pdr_category
+      - pdr_homepage
+      - pdr_product
+      - pdr_product_reference
+      - product_range_extra
+      - user
+      - user_group
+      - business_distribution_contact
+      - file
+      - illustrated_benefits
+      - image
+      - key_facts
+      - project_reference
+      - testimonial
+      - software
+
+  field_types:
+    description: Ibexa field types and their YAML value representations
+    types:
+      ezstring:
+        value: "<string or null>"
+        example: "EXHAUSTO DK"
+      eztext:
+        value: "<multiline string or null>"
+      ezrichtext:
+        value:
+          xml: "<docbook-xml-string>"
+        note: "Uses DocBook 5.0-variant ezpublish-1.0 namespace"
+      ezboolean:
+        value: "<true|false>"
+      ezinteger:
+        value: "<int or null>"
+      ezurl:
+        value: "<url-string or null>"
+      ezimage:
+        value:
+          path: "<relative-file-path>"
+          alternativeText: "<string or null>"
+          fileName: "<filename>"
+          fileSize: "<int>"
+          imageId: "<content_id-field_id-version>"
+          uri: "<image-uri>"
+          width: "<int>"
+          height: "<int>"
+      ezobjectrelation:
+        value:
+          destinationContentId: "<int or null>"
+          alternativeText: "<string or null>"
+        note: "Single content reference"
+      ezobjectrelationlist:
+        value:
+          destinationContentIds: "<array of int>"
+        note: "Multiple content references"
+      eztags:
+        value: "<tag data or empty>"
+      novaseometas:
+        value:
+          title: { meta_name: title, meta_content: "<string>" }
+          description: { meta_name: description, meta_content: "<string>" }
+          canonical: { meta_name: canonical, meta_content: "<string>" }
+          "og:title": { meta_name: "og:title", meta_content: "<string>" }
+          "og:description": { meta_name: "og:description", meta_content: "<string>" }
+          "og:image": { meta_name: "og:image", meta_content: "<string>" }
+          "twitter:title": { meta_name: "twitter:title", meta_content: "<string>" }
+          "twitter:description": { meta_name: "twitter:description", meta_content: "<string>" }
+          "twitter:image": { meta_name: "twitter:image", meta_content: "<string>" }
+      ezlandingpage:
+        value:
+          layout: default
+          zones:
+            - id: "<zone_id>"
+              name: default
+              blocks: "<array of block entries>"
+        note: "Page builder blocks — each block has type, name, view, attributes"
+      ezauthor:
+        value: "<author object or empty>"
+
+  field_definition_structure:
+    description: How fields are defined in content_type.yml
+    schema:
+      identifier: "<field_name>"
+      type: "<ezstring|ezrichtext|...>"
+      position: "<int>"
+      translations:
+        eng-GB:
+          name: "<display name>"
+      required: "<bool>"
+      searchable: "<bool>"
+      translatable: "<bool>"
+      category: "<string or empty>"
+      defaultValue: "<type-specific default>"
+      fieldSettings: "<type-specific settings>"
+      validatorConfiguration: "<validation rules>"
+
+  content_field_entry:
+    description: How field values appear in content exports
+    schema:
+      fieldDefIdentifier: "<field_identifier>"
+      languageCode: "<lang_code>"
+      value: "<type-specific value>"
+
+  landing_page_blocks:
+    description: ezlandingpage block types found in content exports
+    block_structure:
+      visible: "<bool>"
+      id: "<block_id>"
+      type: "<block_type>"
+      name: "<display name>"
+      view: default
+      attributes: "<array of {id, name, value}>"
+    block_types_found:
+      - illustrated_benefits_new
+      - richtext
+      - quick_actions
+      - faq
+      - multiple_push
+
+  reference_system:
+    description: How content references work across the export
+    patterns:
+      content_reference:
+        name: "ref__content__<type>__<slug>"
+        type: content_id
+      location_reference:
+        name: "ref_location__<type>__<slug>"
+        type: location_id
+      path_reference:
+        name: "ref_path__<type>__<slug>"
+        type: path
+      content_type_reference:
+        name: "ref__<type>__content_type_id"
+        type: content_type_id
+    usage: "destinationContentId fields use integer IDs that can be resolved via references"
+
+  multi_site_organization:
+    description: Content organized by country/site
+    sites:
+      dk:
+        content_file: content_Exhausto-DK.yml
+        media_file: media_Exhausto-DK.yml
+        cms_only_file: content_Exhausto-DK-cms-only.yml
+        language: dan-DK
+        mainTranslation: eng-GB
+        note: "Pilot country, has separate cms-only export"
+      de:
+        content_file: content_EXHAUSTO-DE.yml
+        media_file: media_Exhausto-DE.yml
+        language: ger-DE
+      no:
+        content_file: content_EXHAUSTO-NO.yml
+        media_file: media_EXHAUSTO-NO.yml
+        language: nor-NO
+      se:
+        content_file: content_Exhausto.se.yml
+        media_file: media_EXHAUSTO.SE.yml
+        language: swe-SE
+      com:
+        content_file: content_EXHAUSTO.com.yml
+        media_file: media_EXHAUSTO-COM.yml
+        language: eng-GB
+
+  media_export_structure:
+    description: Media files organized as content entries with section=media
+    pattern: "Same content structure as regular content but with section.identifier=media"
+    media_types:
+      - folder (organizing media into hierarchies)
+      - image (ezimage field with binary data references)
+      - file (generic file attachments)
+    key_fields:
+      - "name (folder/image/file name)"
+      - "file or image field with path, uri, fileSize, dimensions"
+
+  product_field_mapping:
+    description: Product content type has PIM-synced fields with DC_ prefix
+    pim_fields:
+      - DC_P_NOMPRODUIT (product name from PIM)
+      - DC_P_CATEGORIEPRODUIT (product category from PIM)
+      - DC_P_PROPOSITIONVALEURPRODUIT (value proposition)
+      - DC_P_ALDESCADLIBRARY (CAD library URL)
+      - DC_P_DESCRIPTIONPRODUIT (full description)
+      - DC_P_DESCRIPTION_DIFFERENCIANTE_PRODUIT (differentiating features)
+    native_fields:
+      - title (product name)
+      - short_title (category/subtitle)
+      - iddoctrine (PIM system ID)
+      - urlpicture (DAM path)
+      - picture (embedded image)
+      - is_section (boolean flag)
+      - sections (sub-product relation list)
+      - product_extra (extended page content)
+
+key_files:
+  - path: ibexa-export/content_type.yml
+    purpose: All content type definitions with field schemas
+  - path: ibexa-export/content_Exhausto-DK.yml
+    purpose: Denmark content export (pilot country, largest)
+  - path: ibexa-export/content_Exhausto-DK-cms-only.yml
+    purpose: Denmark CMS-only content (non-PIM pages)
+  - path: ibexa-export/media_Exhausto-DK.yml
+    purpose: Denmark media/asset export
+  - path: ibexa-export/content_EXHAUSTO-DE.yml
+    purpose: Germany content export
+  - path: ibexa-export/content_EXHAUSTO-NO.yml
+    purpose: Norway content export
+  - path: ibexa-export/content_Exhausto.se.yml
+    purpose: Sweden content export
+  - path: ibexa-export/content_EXHAUSTO.com.yml
+    purpose: Global/English content export
+  - path: ibexa-export/PRODUCT-STRUCTURE.md
+    purpose: Product field reference and language code mapping
+  - path: ibexa-export/IMAGE-RESOLUTION-GUIDE.md
+    purpose: Image resolution handling documentation
+
+best_practices:
+  - "Always check mainTranslation vs languageCode — DK uses eng-GB as mainTranslation but dan-DK for content"
+  - "Use remoteId (not contentId) for cross-file references — contentIds are internal and may differ between environments"
+  - "Parse ezrichtext XML carefully — it uses DocBook 5.0-variant ezpublish-1.0 with custom namespaces (ezxhtml, ezcustom)"
+  - "Handle null values explicitly — many fields can be null, empty object {}, or empty array []"
+  - "ezlandingpage blocks contain inline richtext XML in attributes — double-encoded strings that need careful parsing"
+  - "destinationContentId can be a single int, null, or nested in destinationContentIds array — check field type definition"
+  - "Media section (id: 3) vs content section (id: 1) determines whether an entry is a media asset or content page"
+  - "DK is the pilot country for migration — start there, patterns will apply to other countries"
+  - "Product fields with DC_ prefix are PIM-synced — treat as source-of-truth from external system"
+
+common_pitfalls:
+  - "Confusing contentType identifier with content type display name — identifier is lowercase_snake (e.g., 'editorial_page'), display name is human-readable"
+  - "Missing the cms-only export — DK has both content_Exhausto-DK.yml (full) and content_Exhausto-DK-cms-only.yml (CMS-only pages without PIM products)"
+  - "Inconsistent file naming — case varies across countries: 'Exhausto-DK' vs 'EXHAUSTO-DE' vs 'Exhausto.se'"
+  - "Treating ezobjectrelation and ezobjectrelationlist the same — single uses destinationContentId (int), list uses destinationContentIds (array)"
+  - "Ignoring sortField/sortOrder on locations — these control content ordering in the CMS tree"
+  - "Not handling multi-language fields — some content has fields in both dan-DK and eng-GB with different values"
+  - "Assuming all block types are in content_type.yml — ezlandingpage block types (illustrated_benefits_new, quick_actions, etc.) are defined separately from content types"
+  - "Overlooking the reference entries at the end of each content item — these provide content_id and location_id lookup names"

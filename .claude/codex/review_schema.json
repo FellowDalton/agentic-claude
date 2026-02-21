@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["verdict", "confidence", "issues", "suggestions", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "revise"],
+      "description": "Whether the plan should proceed as-is or needs revision"
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Confidence in the verdict (0-1)"
+    },
+    "summary": {
+      "type": "string",
+      "description": "One-sentence summary of the review"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "section", "description", "suggestion"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "major", "minor"]
+          },
+          "section": {
+            "type": "string",
+            "description": "Which plan section has the issue"
+          },
+          "description": {
+            "type": "string",
+            "description": "What the issue is"
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "How to fix it"
+          }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "General improvement suggestions"
+    }
+  }
+}

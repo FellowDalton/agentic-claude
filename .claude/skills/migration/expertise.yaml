@@ -1,0 +1,636 @@
+# Migration Expertise
+# Content migration pipeline from Ibexa CMS YAML exports to Storyblok — transformer architecture, ID mapping, field conversion, and batch migration workflows
+# Last validated: 2026-02-19
+
+domain: migration
+purpose: Content migration pipeline from Ibexa CMS YAML exports to Storyblok — transformer architecture, ID mapping, field conversion, and batch migration workflows
+
+scope:
+  - Ibexa CMS YAML export parsing and field extraction
+  - Content type routing and transformer dispatch
+  - Per-type transformers (page, article, product, category, header, footer, leaf types)
+  - Richtext XML-to-Storyblok JSON conversion
+  - Asset resolution with multi-strategy fallback chain
+  - Storyblok Management API story upsert (create/update with rate limiting)
+  - Folder structure management (country root, shared subfolders)
+  - ID mapping between Ibexa remoteId and Storyblok UUID/ID
+  - CLI interface (commander) with migrate, migrate-dk-leaf, migrate-dk-pages, migrate-dk-media-leaf, build-contentid-mapping, fix-folder-names, build-node-mapping, and audit-schemas commands
+  - Ezpage block parsing (28 block types) and reference resolution
+  - Folder hierarchy from Ibexa location tree
+  - Dry-run mode with structured JSON audit output
+  - Denmark (dk) pilot country patterns
+  - Post-migration validation framework (7 validators, report generation, CLI command)
+
+# ==========================================================================
+# Architecture
+# ==========================================================================
+
+architecture:
+  pipeline:
+    description: "Read YAML -> filter/route by contentType -> transform -> upsert to Storyblok"
+    stages:
+      - "YAML Reader: parse Ibexa export, build fieldMap per item"
+      - "Transformer Router: dispatch item to type-specific transformer"
+      - "Transformer: convert Ibexa fields to StoryPayload shape"
+      - "Writer: upsert story to Storyblok Management API"
+    entry_point: apps/migration/src/cli.ts
+
+  commands:
+    migrate:
+      description: "General migration — reads full YAML, transforms all items, upserts to Storyblok"
+      flags: "--country <code> --source <path> --dry-run --verbose --limit <n> --asset-mapping <path>"
+    migrate_dk_leaf:
+      description: "DK leaf content migration — filters CMS-only content, migrates in dependency order"
+      flags: "--country <code> --source <path> --dry-run --verbose --asset-mapping <path>"
+      dependency_order: [link, faq, testimonial, key_facts, multiple_push_item, news_category, store_locator, header, footer, contact_bubble]
+      contentid_mapping_loading: "Auto-loads {country}-contentid-mapping.json from apps/migration/data/ dir; logged with entry count; graceful fallback when missing"
+      passes_contentid_to: [transformHeaderFull, transformFooterFull]
+    migrate_dk_pages:
+      description: "DK page migration — home + editorial_page + news_page, builds folder hierarchy from location tree"
+      flags: "--country <code> --source <path> --dry-run --verbose --asset-mapping <path> --id-mapping <path>"
+      page_types: [home, editorial_page, news_page]
+      expected_counts_dk: { home: 1, editorial_page: 131, news_page: 37, total: 169 }
+      uses_external_id: true
+      audit_output: "apps/migration/logs/dry-run-dk-pages-{timestamp}.json (stories, folders, warnings, stats)"
+      auto_detect_mappings:
+        - "{country}-id-mapping.json (remoteId -> storyblok_uuid)"
+        - "{country}-contentid-mapping.json (contentObjectId -> remoteId)"
+        - "{country}-nodeid-mapping.json (nodeId -> contentObjectId) — graceful fallback when absent"
+    migrate_dk_media_leaf:
+      description: "DK media leaf migration — reads media YAML, filters structural/unsupported types, migrates supported leaf content"
+      flags: "--country <code> --source <path> --dry-run --verbose --asset-mapping <path> --merge-mapping"
+      supported_types: [multiple_push_item, faq, key_facts, testimonial, link]
+      skip_types: [image, folder, file, product_thumbnail]
+      unsupported_types: [youtube_video, multiple_push_document, content_link]
+      expected_counts_dk: { multiple_push_item: 245, faq: 28, key_facts: 25, testimonial: 23, link: 3, total: 324 }
+      merge_mapping: "Non-destructive merge into existing id-mapping.json; fails on remoteId collision"
+      audit_output: "apps/migration/logs/dry-run-dk-media-leaf-{timestamp}.json"
+    build_contentid_mapping:
+      description: "Build numeric content ID -> remoteId mapping from authoritative CSV source"
+      flags: "--source-csv <path> --country <code> --id-mapping <path>"
+      output: "apps/migration/data/{country}-contentid-mapping.json"
+      validation: "Rejects duplicate numeric IDs mapping to different remoteIds; warns on unmigrated remoteIds"
+    fix_folder_names:
+      description: "Fix folder/story names that were incorrectly set to slug format (e.g., 'seneste-nyheder' -> 'Seneste Nyheder')"
+      flags: "--country <code> --dry-run --verbose"
+      approach: "Builds slug->originalName map from Ibexa YAML, scans Storyblok stories, updates where name===slug and Ibexa has better name"
+      preserves_danish: "Recovers original Danish chars (ae, oe, aa) from YAML source"
+    build_node_mapping:
+      description: "Build node_id -> contentobject_id mapping from SQL dump (ezcontentobject_tree table)"
+      flags: "--country <code> --source <sql-dump-path>"
+      output: "apps/migration/data/{country}-nodeid-mapping.json"
+      parser: "Streaming readline parser for 1.7GB+ SQL dumps — extracts node_id (col 0) and contentobject_id (col 1) from INSERT INTO ezcontentobject_tree VALUES tuples"
+      dk_results: "69,181 entries extracted in 1.7s"
+    validate_dk:
+      description: "Validate DK migration — runs 7 validators (content-count, link, asset, block, SEO, folder, ID-mapping) and generates JSON+markdown reports"
+      flags: "--country <code> --source <path> --full-source <path> --id-mapping <path> --verbose --skip-asset-check"
+      validators: [ContentCountValidator, LinkValidator, AssetValidator, BlockValidator, SeoValidator, FolderValidator, IdMappingValidator]
+      output: "apps/migration/reports/{country}-validation-report.json and .md"
+      exit_codes: { 0: PASS, 1: FAIL, 2: error }
+    audit_schemas:
+      description: "Audit content types and block types across all country exports against a baseline"
+      flags: "--baseline <country> (default dk) --output <path> (default data/schema-audit-report.json) --verbose"
+      output: "apps/migration/data/schema-audit-report.json"
+      functions: [extractContentTypes, extractBlockTypes, diffContentTypes, diffBlockTypes, generateInventory]
+
+# ==========================================================================
+# Core Patterns
+# ==========================================================================
+
+core_patterns:
+  yaml_reader:
+    description: "Parse Ibexa YAML export into IbexaContentItemWithFieldMap objects"
+    file: apps/migration/src/reader/yaml-reader.ts
+    functions:
+      readYamlExport: "Parse YAML, filter type=content, build fieldMap per item"
+      buildFieldMap: "Group IbexaField[] by fieldDefIdentifier then languageCode"
+      getFieldValue: "Lookup field value by name and langCode with optional fallback"
+    pattern: "Fields stored as { [fieldDefIdentifier]: { [languageCode]: value } } for O(1) lookup"
+
+  transformer_routing:
+    description: "Central router dispatches items to type-specific transformers"
+    file: apps/migration/src/transformer/index.ts
+    function: transformItem
+    signature: "(item, country, logger, resolver?) -> StoryPayload | null"
+    type_sets:
+      PAGE_TYPES: [landing_page, editorial_page]
+      ARTICLE_TYPES: [article, news_page]
+      PRODUCT_RANGE_TYPES: [product_range, product_range_extra]
+      LEAF_TYPES: [link, faq, testimonial, key_facts, multiple_push_item, news_category, store_locator, contact_bubble]
+      SKIP_TYPES: [folder, user, user_group, design_configuration, nextpage_configuration, site_configuration, mailer_configuration, my_products, header_element, header_product]
+      PAGE_LIKE_TYPES: {news_list: news_list, document_list: document_list, software_list: software_list, contact_page_new: contact_page}
+    pattern: "Cascade of Set.has() checks, returns null for skipped/unknown types"
+
+  transformer_signature:
+    description: "All transformers follow the same function signature pattern"
+    pattern: "(item: IbexaContentItemWithFieldMap, langCode: string, resolver?: AssetResolver) -> StoryPayload | null"
+    output_shape:
+      name: "Display name (from title field)"
+      slug: "URL-safe slug (via generateSlug)"
+      content: "{ component: string, ...fields }"
+      meta_data: "{ ibexa_remote_id, ibexa_content_type }"
+      is_startpage: "true only for home content type"
+
+  field_extraction:
+    description: "Common pattern for extracting typed fields from Ibexa fieldMap"
+    pattern: |
+      const value = getFieldValue(fm, 'field_name', langCode, FALLBACK_LANG);
+    fallback_chain: "Try requested langCode first, then FALLBACK_LANG (eng-GB)"
+    field_types:
+      string: "Direct string value"
+      richtext: "XML string -> convertRichtext() -> Storyblok richtext JSON"
+      relation: "{ destinationContentId: number } -> asset resolution"
+      author: "Array of { name, email } -> comma-joined string"
+      seo: "Nested { title: { meta_content }, description: { meta_content } }"
+      tags: "Array of string or {id, keywords: {langCode: value}} objects -> extract keyword per langCode with FALLBACK_LANG -> comma-joined string"
+      publish_date: "{ timestamp: <epoch_seconds_or_ms> } or date string -> ISO 8601 string; fallback to metadata.publicationDate"
+      boolean_flag: "Can be boolean true, string 'true', string '1', or number 1 — all coerce to boolean true (e.g., no_index)"
+      enum_field: "String field value with contentType fallback when empty (e.g., page_type)"
+
+  richtext_conversion:
+    description: "Convert Ibexa XML richtext to Storyblok richtext JSON format"
+    file: apps/migration/src/transformer/richtext.ts
+    function: convertRichtext
+    pattern: "Parse XML string, walk DOM nodes, convert to { type: 'doc', content: [...nodes] }"
+    threading: "Optional AssetResolver threaded through deep call chain for image resolution"
+
+  asset_resolution:
+    description: "Multi-strategy fallback chain for resolving Ibexa image refs to Storyblok URLs"
+    file: apps/migration/src/utils/asset-resolver.ts
+    class: AssetResolver
+    constructor: "AssetResolver(mapping: AssetMapping, altTextLookup?: Record<string, string>)"
+    strategies_in_order: [ibexaUri, damPath, filename, contentId]
+    input: "asset-url-mapping.json from tools/media-migration"
+    output: "AssetResolutionResult { resolved, asset: StoryblokAssetField | null, strategy, originalRef }"
+    stats_tracking: "Counters per strategy for resolution summary reporting"
+    coverage_dk: "87.5% (147/168 image refs resolved)"
+    alt_text_resolution:
+      contentId_strategy: "Direct lookup in altTextLookup by content ID"
+      ibexaUri_strategy: "Extract content ID from URI pattern (/digits-digits-langCode/filename) then lookup"
+      private_method: lookupAltTextFromUri
+
+  content_folder_map:
+    description: "Maps content types to Storyblok subfolder paths"
+    constant: CONTENT_FOLDER_MAP
+    type: "Record<string, FolderSegment[]>"
+    mapping:
+      link: [shared, links]
+      faq: [shared, faq]
+      testimonial: [shared, testimonials]
+      key_facts: [shared, key-facts]
+      multiple_push_item: [shared, cards]
+      news_category: [shared, news-categories]
+      store_locator: [shared]
+      contact_bubble: [global]
+      header: [global]
+      footer: [global]
+
+  storyblok_writer:
+    description: "Manages story creation/updates via Storyblok Management API"
+    file: apps/migration/src/writer/storyblok-writer.ts
+    class: StoryblokWriter
+    methods:
+      upsertStory: "Find by slug in parent folder, update if found, create if not"
+      upsertStoryByExternalId: "Idempotent upsert using external_id for lookup"
+      ensureCountryFolder: "Create/find country root folder — passes uppercase country name (country.toUpperCase())"
+      ensureSubfolder: "Create nested folder path — accepts FolderSegment[] | string[], passes name to ensureFolder when available"
+      ensureFolder: "Create/find folder by slug — accepts optional name param, uses displayName (name || slug) for API name field"
+      writeDryRunOutput: "Write collected dry-run payloads to JSON file"
+    rate_limiting: "170ms delay between consecutive API calls"
+    pagination: "Lists all stories in folder with per_page=25, caches results per folder"
+    slug_collision_handling: "When external_ids differ, deduplicates slug with -N suffix"
+
+  ezpage_parser:
+    description: "Parse Ibexa ezpage block data into Storyblok nestable bloks"
+    file: apps/migration/src/transformer/ezpage-parser.ts
+    function: parseEzpageBlocks
+    signature: "(ezpageData, resolver?: ReferenceResolver, assetResolver?: AssetResolver) -> StoryContent[]"
+    block_type_count: 28
+    block_type_renames: "Map from Ibexa block type to Storyblok component name (e.g., richtext->richtext_block, aldes_banner->service_banner, seo->richtext_block)"
+    _uid_generation: "Every blok gets _uid = randomUUID() if not already set (prevents Storyblok 422)"
+    cta_int_link_wrapping: "cta_int_link_1/2 values wrapped in {fieldtype:'multilink', linktype:'story', _pending_relation, cached_url} -- bare numeric strings cause Storyblok 422"
+    specialized_mappers:
+      - "button_cta (file attr via AssetResolver + cta_internal_link via ReferenceResolver; signature: mapButtonCtaBlock(attrs, resolver?, assetResolver?))"
+      - "multiple_push (internal_link + internal_link_text via ReferenceResolver)"
+      - "anchors (link_list CSV via ReferenceResolver)"
+      - "contact (CTA groups->contact_cta bloks)"
+      - "faq (CSV ID resolution)"
+      - testimonial
+      - key_facts
+      - push_news
+      - quick_actions
+    generic_mapper: "Unknown types get raw attributes + renamed component via BLOCK_TYPE_RENAMES fallback"
+
+  reference_resolver:
+    description: "Resolve Ibexa content references to Storyblok UUIDs via 3-step ID mapping chain"
+    file: apps/migration/src/transformer/reference-resolver.ts
+    class: ReferenceResolver
+    constructor: "(mapping: IDMapping, contentIdMapping?: ContentIdMapping, nodeIdMapping?: NodeIdMapping)"
+    types:
+      ContentIdMapping: "Record<string, string> — contentobject_id -> remoteId"
+      NodeIdMapping: "Record<string, string> — node_id -> contentobject_id"
+    resolution_chain:
+      step_1: "Direct remoteId lookup in idMapping"
+      step_2: "contentObjectId -> remoteId (via contentIdMapping) -> storyblok_uuid (via idMapping)"
+      step_3: "nodeId -> contentObjectId (via nodeIdMapping) -> remoteId (via contentIdMapping) -> storyblok_uuid (via idMapping)"
+    priority: "Step 2 (contentIdMapping) takes priority over Step 3 (nodeIdMapping) — prevents integer space collision"
+    fromFile: "static fromFile(filePath, contentIdMappingPath?, nodeIdMappingPath?) — loads all 3 mappings from JSON files"
+    collision_safety: "node_id and contentobject_id share integer space — MUST be stored in separate mappings"
+
+  folder_hierarchy:
+    description: "Build location tree from Ibexa folder items and resolve folder paths"
+    file: apps/migration/src/transformer/folder-hierarchy.ts
+    types:
+      FolderSegment: "{ slug: string; name: string }"
+      LocationTreeEntry: "{ slug, name, parentRemoteId, isFolder }"
+    functions:
+      buildLocationTree: "Build parent->child tree from folder items using location.parentLocationRemoteId"
+      getFolderPath: "Walk up location tree to build FolderSegment[] — each segment has slug + original name"
+    name_preservation: "Original names from Ibexa YAML stored in LocationTreeEntry.name field; XML preamble stripped"
+    known_limitation: "Only routes through folder-type parents; pages nested under other pages are placed at root"
+
+  id_mapping:
+    description: "Track Ibexa remoteId -> Storyblok UUID/ID for cross-referencing"
+    type: "IDMapping = Record<string, { storyblok_uuid, storyblok_id, component }>"
+    output_file: "apps/migration/data/dk-id-mapping.json"
+    purpose: "Enables content linking between migrated stories"
+
+  ibexa_api_resolution:
+    description: "Resolve remoteId -> numeric contentId via live Ibexa CMS REST API"
+    endpoint: "GET /api/ezp/v2/content/objects?remoteId=<remoteId>"
+    api_base: "/api/ezp/v2/ (NOT /api/ibexa/v2/ — returns 404)"
+    auth: "Browser session — requires CSRF token from meta[name='CSRF-Token'] + credentials: same-origin"
+    search_endpoint: "POST /api/ezp/v2/views with ViewInput.Query (NOT ContentQuery)"
+    response_fields: "Content._id (numeric), Content._remoteId, Content.Name"
+    batch_pattern: "Query each remoteId individually with rate limiting (50ms per 5 requests)"
+    dk_results: "324 media items resolved, 0 failures"
+
+  slug_utils:
+    file: apps/migration/src/utils/slug.ts
+    functions:
+      generateSlug: "Convert name to URL-safe slug (irreversible — lowercases, transliterates ae/oe/aa)"
+      slugToTitle: "Convert slug back to title case as fallback (splits on dash, capitalizes each word)"
+
+  validation_framework:
+    description: "Post-migration validation with 7 specialized validators, StoryblokReader for read-only API queries, and JSON+markdown report generation"
+    directory: apps/migration/src/validator/
+    types_file: apps/migration/src/validator/types.ts
+    interfaces: [ValidationCheck, ValidationSection, ValidationReport, Validator, StoryblokStory, StoryblokFolder, ValidationOptions]
+    storyblok_reader:
+      file: apps/migration/src/validator/storyblok-reader.ts
+      class: StoryblokReader
+      methods: [getAllStories, getStoriesByComponent, getStoriesInFolder, storyExists, getStoryByUuid, getFolders]
+      caching: "Load all stories once, answer queries from cache; UUID index for O(1) lookup"
+      rate_limiting: "100ms between API calls"
+      retry: "3 retries with exponential backoff (1s, 2s, 4s) on 429, 5xx, ECONNRESET, ETIMEDOUT"
+      test_mode: "Accept stories array directly via constructor (bypasses API)"
+    validators:
+      content_count: { file: content-count-validator.ts, maps: "Ibexa contentType -> Storyblok component, zero tolerance" }
+      link: { file: link-validator.ts, approach: "Dynamic recursive UUID discovery + known relation field names + richtext link walking" }
+      asset: { file: asset-validator.ts, approach: "HTTP HEAD with 5-concurrent limit, 405 fallback to GET, retry on timeout, fetchFn injectable" }
+      block: { file: block-validator.ts, approach: "Parse ezpage zones/blocks at runtime, compare total + per-type counts" }
+      seo: { file: seo-validator.ts, approach: "Check novaseometas/seo field presence vs seo_title/seo_description population" }
+      folder: { file: folder-validator.ts, approach: "Verify /{country}/ prefix, /global/ placement, /shared/ subfolders" }
+      id_mapping: { file: id-mapping-validator.ts, approach: "Completeness check, duplicate detection, exhaustive UUID existence verification" }
+    report_generator:
+      file: apps/migration/src/validator/report-generator.ts
+      functions: [generateJsonReport, generateMarkdownReport, writeReports]
+    orchestrator:
+      file: apps/migration/src/validator/index.ts
+      function: runValidation
+      execution_order: [content-count, block, seo, folder, id-mapping, link, asset]
+
+  country_schema_audit:
+    description: "Cross-country schema auditing — extract content types and block types from all country YAML exports, diff against DK baseline, generate CMS inventory"
+    file: apps/migration/src/audit/country-schema-audit.ts
+    functions:
+      extractContentTypes: "Parse YAML export, return Record<contentType, count> for all content items"
+      extractBlockTypes: "Parse ezpage/ezlandingpage fields, return Record<blockType, {count, attributes}> with try/catch per item"
+      diffContentTypes: "Compare baseline vs others, return SchemaGap[] excluding PIM and structural types"
+      diffBlockTypes: "Compare baseline vs others, return BlockGap[] with attribute diffs"
+      generateInventory: "Produce per-country CMS content inventory excluding PIM/structural types"
+    exclusion_sets:
+      PIM_TYPES: [product, category, document, software, product_extra, product_range, product_range_extra]
+      STRUCTURAL_TYPES: [folder, user, user_group, design_configuration, nextpage_configuration, site_configuration, mailer_configuration, my_products]
+    types: [SchemaGap, BlockGap, BlockTypeMap, CountryInventoryEntry, InventoryReport, AuditReport]
+
+  content_type_to_component_mapping:
+    description: "Ibexa content type -> Storyblok component name mapping for count validation"
+    mapping: { editorial_page: page, news_page: article, home: home, link: link, faq: faq_item, testimonial: testimonial_item, key_facts: key_facts_item, multiple_push_item: push_card, news_category: news_category, store_locator: store_locator, header: header, footer: footer, contact_bubble: contact_bubble }
+    known_skips: [my_products (obsolete), header_element (inline), header_product (inline)]
+
+# ==========================================================================
+# Types
+# ==========================================================================
+
+types:
+  ibexa:
+    file: apps/migration/src/types/ibexa.ts
+    key_interfaces:
+      IbexaContentItem: "Raw parsed item with type, mode, metadata, location, fields[], references[]"
+      IbexaContentItemWithFieldMap: "Extends IbexaContentItem with pre-grouped fieldMap"
+      IbexaFieldMap: "{ [fieldDefIdentifier]: { [languageCode]: any } }"
+      IbexaMetadata: "contentType, mainTranslation, remoteId, publicationDate, etc."
+  storyblok:
+    file: apps/migration/src/types/storyblok.ts
+    key_interfaces:
+      StoryPayload: "{ name, slug, content: StoryContent, parent_id?, meta_data?, is_startpage?, external_id? }"
+      StoryContent: "{ component: string, [key: string]: any }"
+      IDMapping: "Record<string, { storyblok_uuid, storyblok_id, component }>"
+      StoryblokAssetField: "{ id, alt, name, focus, title, source, copyright, fieldtype: 'asset', filename }"
+      AssetMapping: "{ ibexaUri: Record<string,string>, damPath: Record<string,string>, contentId: Record<string,number> }"
+      AssetResolutionResult: "{ resolved, asset, strategy, originalRef }"
+
+# ==========================================================================
+# Best Practices
+# ==========================================================================
+
+best_practices:
+  - "Always use --dry-run first to verify transformation output before live migration"
+  - "Thread optional AssetResolver through transformers for backward compatibility (resolver? parameter)"
+  - "Use getFieldValue with FALLBACK_LANG for multilingual field extraction"
+  - "Maintain dependency order in leaf migration: links first (referenced by header/footer), then leaf, then global"
+  - "Deduplicate slugs per folder to prevent Storyblok 422 errors on create"
+  - "Use external_id for idempotent upsert — avoids duplicates on re-runs"
+  - "Rate-limit Storyblok Management API calls (170ms delay between requests)"
+  - "Cache folder story listings per parent folder to avoid redundant API calls"
+  - "Write unresolved asset references to log file for manual review"
+  - "Use meta_data.ibexa_remote_id for traceability between source and target"
+  - "Validation validators are self-contained in src/validator/ to avoid coupling with migration pipeline types"
+  - "StoryblokReader loads all stories once into cache — all subsequent queries are in-memory (no extra API calls)"
+  - "Run non-network validators first (count, block, SEO, folder, ID mapping) before network-dependent ones (link, asset) for faster feedback"
+  - "Use --skip-asset-check during development to skip slow HTTP HEAD checks"
+  - "All validation types live in src/validator/types.ts — not in src/types/storyblok.ts"
+
+# ==========================================================================
+# Common Pitfalls
+# ==========================================================================
+
+common_pitfalls:
+  - "Storyblok with_slug matches full_slug (dk/shared/links/slug), not slug alone — must list by with_parent and filter client-side"
+  - "ESM imports require .js extension (e.g., import from './richtext.js') even though source is .ts"
+  - "StoryblokModule has inconsistent CJS/ESM default export — use typeof check for compatibility"
+  - "Ibexa ezpage zones contain richtext in block attributes, not top-level body field — need extractEzpageRichtext fallback"
+  - "ezauthor field is an array of {name, email}, not a string — must map and join"
+  - "Ibexa SEO field has nested structure: seo.title.meta_content, seo.description.meta_content"
+  - "Page title fallback chain: try 'title', then 'title1', then 'name', then remoteId"
+  - "OnlyOneLevel is string 'false' not boolean in PIM API (quirk from Postman export)"
+  - "Ibexa content can be reorganized (deleted+recreated) giving items new numeric contentIds while preserving remoteIds — page blocks still reference OLD contentIds that no longer exist in CMS or any export"
+  - "Page block references in ezpage_attributes use node_id (from ezcontentobject_tree), NOT contentobject_id. The 282 unresolved IDs from Story 4-9 in the 77xxx-79xxx range are valid node_ids that map to existing contentobject_ids via nodeIdMapping. Only IDs above 117563 may be truly unresolvable."
+  - "node_id and contentobject_id share the same integer space (both can be in 35000-105765 range for DK) — the nodeIdMapping MUST be stored separately from contentIdMapping to avoid incorrect resolutions. ReferenceResolver enforces this by trying contentIdMapping (step 2) before nodeIdMapping (step 3)."
+  - "Content IDs in 102xxx range may be missing from media export — newer content not exported"
+  - "DK leaf migration must write ID mapping only in live mode (--dry-run skips to avoid overwriting live data)"
+  - "Folder story cache must be invalidated after any write (create/update) to that folder"
+  - "getFolderPath only walks folder-type parents — pages nested under other pages land at root (110/169 DK pages affected)"
+  - "ReferenceResolver can return objects, not strings — coercing to string yields '[object Object]' (FIXED: cta_internal_url now extracts destinationContentId)"
+  - "Some Ibexa titles contain XML declarations (<?xml ...>) — must strip XML prefix before using as story name"
+  - "Pages with non-Danish-only titles (e.g., German 'Programme zur Produktauswahl') may not have title in target lang — fallback to remoteId hash"
+  - "Dry-run audit JSON warnings array must be populated — stderr logging alone is not captured in the audit"
+  - "Media YAML uses 'internal_link' field for push cards; content YAML uses 'link' — transformPushCard falls back: link ?? internal_link"
+  - "Media YAML contains structural types (image, folder, file, product_thumbnail) that must be filtered before migration — they are not content items"
+  - "Ibexa tags field can be [{id, keywords: {langCode: value}}] objects, not just string arrays — must extract keyword strings per language with FALLBACK_LANG fallback"
+  - "Ibexa publish_date field is { timestamp: <epoch> } object — handle both seconds and milliseconds epoch (ts > 1e12 means ms); prefer field-level over metadata.publicationDate"
+  - "DK page_type fields are all empty in the export — the enum values (product, solution, etc.) may only exist for non-DK countries; code correctly falls back to metadata.contentType"
+  - "ezpage button_cta blocks can have a 'file' attribute (content ID for downloadable docs) — resolve via AssetResolver or store as raw contentId"
+  - "ezpage multiple_push blocks can have 'internal_link' + 'internal_link_text' for 'view all' section links — resolve internal_link via ReferenceResolver"
+  - "ezpage anchors blocks have link_list CSV that needs splitting into array even without resolver — follow same pattern as faq_list, testimonial_list"
+  - "Pre-corrupted string values like '[object Object]' may exist in source YAML (e.g., DK 'Test af newstemplate' tags) — cannot be fixed by transformer logic"
+  - "Ibexa SEO field name varies: 'seo' in some content types, 'novaseometas' in others — validator must check both via getFieldValue fallback"
+  - "ezpage field value can be JSON string or object — validator must JSON.parse string values before counting blocks"
+  - "Link validator must check both UUID v4 regex AND known relation field names (cta_internal_url, items, link_list, etc.) — non-UUID string references in known fields are valid references"
+  - "AssetValidator needs injectable fetchFn for testing — vi.fn() mocks replace global fetch; use fetchFn constructor option"
+  - "IdMappingValidator needs both file path (production) and direct object (testing) input modes — idMappingPath vs idMapping option"
+  - "StoryblokReader test mode accepts stories[] directly — bypasses API entirely, no client instantiation"
+  - "Block type gaps in audit may be false positives — e.g., multiple_push_documents has a mapper (mapDocumentCardGridBlock) and schema (document_card_grid) but DK simply doesn't use it in any ezpage content"
+  - "DK header_element and header_product items store their label in the 'name' field, NOT 'title' — must check 'name' first with 'title' as fallback"
+  - "Bare numeric strings in Storyblok multilink-type fields cause 422 rejection — always wrap in {fieldtype:'multilink', linktype:'story', _pending_relation: id} objects"
+  - "Every Storyblok nestable blok (ezpage block) MUST have a _uid field with a valid UUID — missing _uid causes silent 422 rejection by the Management API"
+  - "Header elements have column navigation data: column1_title through column4_title (text), column1 through column4 (destinationContentIds arrays for page links), column1_link through column4_link (single destinationContentId for column header link). Column page links may need two-step resolution: numericId -> remoteId (contentIdMapping) -> Storyblok UUID (idMapping). If target not migrated, store as _pending_relation."
+  - "Header product content type uses 'product_folder' field (not 'link') for the product folder relation, and has 'ecatalogue_link' (object with link+text) and 'ecatalogue_label' (text) fields. buildHeaderProductBlok falls back to legacy 'link' field if product_folder is absent."
+
+# ==========================================================================
+# Content Types
+# ==========================================================================
+
+content_type_transformers:
+  page: { file: "apps/migration/src/transformer/page-transformer.ts", component: "page", image_fields: [header_image, featured_image, image], extra_fields: [no_index (boolean coercion), page_type (enum with contentType fallback)] }
+  article: { file: "apps/migration/src/transformer/article-transformer.ts", component: "article", extra_fields: [publish_date (field-level with metadata fallback), tags (keyword extraction from tag objects)] }
+  home: { file: "apps/migration/src/transformer/home-transformer.ts", component: "home", is_startpage: true }
+  product: { file: "apps/migration/src/transformer/product-transformer.ts", component: "product" }
+  category: { file: "apps/migration/src/transformer/category-transformer.ts", component: "category" }
+  document: { file: "apps/migration/src/transformer/document-transformer.ts", component: "document" }
+  software: { file: "apps/migration/src/transformer/software-transformer.ts", component: "software" }
+  product_range: { file: "apps/migration/src/transformer/product-range-transformer.ts", component: "product_range" }
+  header:
+    file: "apps/migration/src/transformer/header-transformer.ts"
+    component: "header"
+    buildHeaderElementBlok:
+      field_name_fix: "reads 'name' field (not 'title'), with fallback to 'title'"
+      signature: "(item, langCode, contentIdMapping?) -> Record<string, any>"
+      column_data: [column1_title..column4_title, column1..column4 (destinationContentIds), column1_link..column4_link, column3links, column3linkstitle, main]
+    buildHeaderProductBlok:
+      field_name_fix: "reads 'name' field (not 'title'), with fallback to 'title'"
+      field_renames: { product_folder: "replaces link", ecatalogue_link: "object with url+text", ecatalogue_label: "text field" }
+      fallback: "falls back to legacy 'link' field if product_folder absent"
+  footer: { file: "apps/migration/src/transformer/footer-transformer.ts", component: "footer" }
+  link: { file: "apps/migration/src/transformer/link-transformer.ts", component: "link" }
+  leaf_types: { file: "apps/migration/src/transformer/leaf-transformer.ts", types: [faq, testimonial, key_facts, multiple_push_item, news_category, store_locator], push_card_fields: [title, link_or_internal_link, description, external_link, is_new, imageasset] }
+  contact_bubble: { file: "apps/migration/src/transformer/contact-bubble-transformer.ts", component: "contact_bubble" }
+  dk_leaf_migration:
+    file: "apps/migration/src/transformer/dk-leaf-migration.ts"
+    functions: [filterCmsOnlyContent, extractAndResolveAssets, migrateDkLeafContent, transformHeaderFull, transformFooterFull, findItemByAnyId]
+    findItemByAnyId:
+      exported: true
+      signature: "(items, contentId, contentIdMapping?) -> IbexaContentItemWithFieldMap | undefined"
+      strategies:
+        1: "Direct remoteId match"
+        2: "locationRemoteId match"
+        3: "numericId -> contentIdMapping -> remoteId -> match by metadata.remoteId"
+    transformHeaderFull_signature: "(item, langCode, allItems, resolver?, contentIdMapping?) -> StoryPayload | null"
+    transformFooterFull_signature: "(item, langCode, allItems, resolver?, contentIdMapping?) -> StoryPayload | null"
+    MigrateDkLeafOptions_includes_contentIdMapping: true
+
+# ==========================================================================
+# Configuration
+# ==========================================================================
+
+configuration:
+  env_vars:
+    STORYBLOK_SPACE_ID: "Target Storyblok space ID"
+    STORYBLOK_MANAGEMENT_TOKEN: "Management API personal access token"
+  dotenv: "Loaded from apps/migration/.env"
+  valid_countries: "Defined in apps/migration/src/utils/country.ts (VALID_COUNTRIES)"
+  language_codes:
+    dk: "dan-DK"
+    de: "ger-DE"
+    no: "nor-NO"
+    se: "swe-SE"
+    en: "eng-GB"
+  fallback_lang: "eng-GB"
+  directories:
+    root: "apps/migration/"
+    source: "apps/migration/src/"
+    logs: "apps/migration/logs/"
+    data: "apps/migration/data/"
+    ibexa_export: "ibexa-export/"
+
+# ==========================================================================
+# Testing
+# ==========================================================================
+
+testing:
+  framework: vitest
+  config: apps/migration/vitest.config.ts
+  include_patterns: ["tests/**/*.test.ts", "src/**/*.test.ts"]
+  key_test_files:
+    - apps/migration/src/transformer/article-transformer.test.ts
+    - apps/migration/src/transformer/page-transformer.test.ts
+    - apps/migration/src/transformer/category-transformer.test.ts
+    - apps/migration/src/transformer/product-transformer.test.ts
+    - apps/migration/src/transformer/product-range-transformer.test.ts
+    - apps/migration/src/transformer/document-transformer.test.ts
+    - apps/migration/src/transformer/software-transformer.test.ts
+    - apps/migration/src/transformer/home-transformer.test.ts
+    - apps/migration/src/transformer/richtext.test.ts
+    - apps/migration/src/transformer/index.test.ts
+    - apps/migration/src/transformer/global-transformers.test.ts
+    - apps/migration/src/transformer/dk-leaf-migration.test.ts
+    - apps/migration/src/schemas/schema-blocks.test.ts
+    - apps/migration/src/utils/asset-resolver.test.ts
+    - apps/migration/src/transformer/ezpage-parser.test.ts
+    - apps/migration/src/transformer/folder-hierarchy.test.ts
+    - apps/migration/src/transformer/reference-resolver.test.ts
+    - apps/migration/src/transformer/dk-page-migration.test.ts
+    - apps/migration/src/transformer/leaf-transformer.test.ts
+    - apps/migration/src/utils/contentid-mapper.test.ts
+    - apps/migration/src/utils/nodeid-mapper.test.ts
+    - apps/migration/src/validator/content-count-validator.test.ts
+    - apps/migration/src/validator/link-validator.test.ts
+    - apps/migration/src/validator/asset-validator.test.ts
+    - apps/migration/src/validator/block-validator.test.ts
+    - apps/migration/src/validator/id-mapping-validator.test.ts
+    - apps/migration/src/validator/seo-validator.test.ts
+    - apps/migration/src/validator/folder-validator.test.ts
+    - apps/migration/src/validator/dk-validation.test.ts
+    - apps/migration/src/audit/country-schema-audit.test.ts
+  run_command: "cd apps/migration && npx vitest run"
+  esm_note: "ESM imports require .js extension on relative imports"
+
+# ==========================================================================
+# Key Files
+# ==========================================================================
+
+key_files:
+  - path: apps/migration/src/cli.ts
+    purpose: "CLI entry point with migrate, migrate-dk-leaf, migrate-dk-pages, migrate-dk-media-leaf, build-contentid-mapping, fix-folder-names, and build-node-mapping commands"
+  - path: apps/migration/src/transformer/index.ts
+    purpose: "Central transformer router — dispatches items by contentType"
+  - path: apps/migration/src/reader/yaml-reader.ts
+    purpose: "YAML parser — readYamlExport, buildFieldMap, getFieldValue"
+  - path: apps/migration/src/writer/storyblok-writer.ts
+    purpose: "Storyblok Management API writer — upsert, folder management"
+  - path: apps/migration/src/writer/folder-manager.ts
+    purpose: "Idempotent folder creation for Storyblok"
+  - path: apps/migration/src/transformer/richtext.ts
+    purpose: "XML richtext to Storyblok JSON conversion"
+  - path: apps/migration/src/utils/asset-resolver.ts
+    purpose: "Multi-strategy image resolution from Ibexa to Storyblok URLs"
+  - path: apps/migration/src/utils/country.ts
+    purpose: "Country config — VALID_COUNTRIES, getLangCode, getYamlPath"
+  - path: apps/migration/src/utils/slug.ts
+    purpose: "URL-safe slug generation"
+  - path: apps/migration/src/types/ibexa.ts
+    purpose: "TypeScript interfaces for Ibexa content items and field maps"
+  - path: apps/migration/src/types/storyblok.ts
+    purpose: "TypeScript interfaces for Storyblok payloads, ID mapping, asset types"
+  - path: apps/migration/src/transformer/ezpage-parser.ts
+    purpose: "Parse Ibexa ezpage blocks to Storyblok nestable bloks — 26 block type mappings"
+  - path: apps/migration/src/transformer/reference-resolver.ts
+    purpose: "Resolve Ibexa content IDs to Storyblok UUIDs via id-mapping + contentid-mapping"
+  - path: apps/migration/src/transformer/folder-hierarchy.ts
+    purpose: "Build location tree from folder items, resolve folder paths for page routing"
+  - path: apps/migration/src/utils/contentid-mapper.ts
+    purpose: "Parse CSV content ID source, validate uniqueness, cross-validate against id-mapping"
+  - path: apps/migration/src/utils/nodeid-mapper.ts
+    purpose: "Streaming SQL dump parser — extracts node_id -> contentobject_id from ezcontentobject_tree INSERT statements (handles 1.7GB+ files via readline)"
+  - path: apps/migration/src/transformer/dk-leaf-migration.ts
+    purpose: "DK leaf content migration — CMS-only filtering, header/footer full transforms"
+  - path: apps/migration/src/validator/types.ts
+    purpose: "Validation framework types — ValidationCheck, ValidationSection, ValidationReport, Validator, StoryblokStory, StoryblokFolder, ValidationOptions"
+  - path: apps/migration/src/validator/storyblok-reader.ts
+    purpose: "Read-only Storyblok API client with caching, pagination, rate limiting, retry"
+  - path: apps/migration/src/validator/content-count-validator.ts
+    purpose: "AC-1: Source vs destination content type count comparison"
+  - path: apps/migration/src/validator/link-validator.ts
+    purpose: "AC-2: Internal link integrity via dynamic UUID discovery and richtext walking"
+  - path: apps/migration/src/validator/asset-validator.ts
+    purpose: "AC-3: Asset URL reachability via HTTP HEAD with concurrency limiting"
+  - path: apps/migration/src/validator/block-validator.ts
+    purpose: "AC-4: Block completeness — ezpage source parsing vs Storyblok body comparison"
+  - path: apps/migration/src/validator/seo-validator.ts
+    purpose: "AC-5: SEO metadata completeness (novaseometas -> seo_title/seo_description)"
+  - path: apps/migration/src/validator/folder-validator.ts
+    purpose: "AC-6: Folder structure hierarchy validation"
+  - path: apps/migration/src/validator/id-mapping-validator.ts
+    purpose: "AC-7: ID mapping completeness with exhaustive UUID existence check"
+  - path: apps/migration/src/validator/report-generator.ts
+    purpose: "JSON and markdown report generation from ValidationReport"
+  - path: apps/migration/src/validator/index.ts
+    purpose: "Validation orchestrator — runs all 7 validators, aggregates report"
+  - path: apps/migration/src/audit/country-schema-audit.ts
+    purpose: "Cross-country schema audit — content type diff, block type diff, CMS inventory generation"
+
+# ==========================================================================
+# DK Data Reference
+# ==========================================================================
+
+dk_data:
+  media_export:
+    file: "ibexa-export/media_Exhausto-DK.yml"
+    total_items: 1401
+    structural_skip: { image: 789, folder: 149, file: 67, product_thumbnail: 43 }
+    unsupported_skip: { youtube_video: 21, multiple_push_document: 4, content_link: 4 }
+    supported: { multiple_push_item: 245, faq: 28, key_facts: 25, testimonial: 23, link: 3, total: 324 }
+  content_export:
+    file: "ibexa-export/content_Exhausto-DK.yml"
+    total_items: 864
+    leaf_items: 52
+    page_items: 169
+  contentid_mapping:
+    file: "apps/migration/data/dk-contentid-mapping.json"
+    entries: 1182
+    sources:
+      - "Original CSV: 737 entries"
+      - "Leaf migration additions: 137 entries"
+      - "Ibexa API media resolution: 308 new entries (245 push_item + 28 faq + 25 key_facts + 23 testimonial + 3 link)"
+  nodeid_mapping:
+    file: "apps/migration/data/dk-nodeid-mapping.json"
+    entries: 69181
+    source: "SQL dump ezcontentobject_tree table"
+    node_id_range: "1-157687"
+    contentobject_id_range: "0-105765"
+  id_mapping:
+    content_leaf_entries: 52
+    media_leaf_entries: 324
+    merged_total: 376
+    collision_check: "0 remoteId collisions between content and media items"
+  audit_baseline:
+    content_type_gaps: 1
+    block_type_gaps: 3
+    gaps_detail:
+      sales_contact_list: { countries: [de], count: 1, status: accepted_exception, reason: "sub-entity type mapped within store_locator/contact_page" }
+      multiple_push_documents: { countries: [de, en], counts: {de: 2, en: 1}, status: accepted_exception, reason: "mapper and schema exist (document_card_grid), DK just does not use it" }
+      aldes_banner: { countries: [en], count: 1, status: accepted_exception, reason: "schema exists as service_banner, generic mapper handles it" }
+      seo: { countries: [en], count: 1, status: accepted_exception, reason: "1 instance with anchor+content attrs, generic mapper handles it" }
+    cms_inventory:
+      dk: 229
+      se: 159
+      de: 200
+      no: 172
+      en: 145
+      total: 905
+  baseline_reference_warnings:
+    file: "apps/migration/logs/baseline-unresolved-count.txt"
+    total_warnings: 724
+    unique_unresolved_ids: 363
+    reference_resolving_blocks: { card_grid: 82, quick_actions: 15, faq_block: 9, testimonial_block: 10, key_facts_block: 5, logo_card_grid: 8, solution_components: 15, news_highlights: 6, video_gallery: 5, multi_content: 1, total: 156 }

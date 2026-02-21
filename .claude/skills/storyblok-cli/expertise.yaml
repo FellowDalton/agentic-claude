@@ -1,0 +1,372 @@
+# Storyblok CLI Expert
+# CLI commands, component schema management, content migration, type generation, and space configuration
+
+version: "1.2"
+last_updated: "2026-02-19"
+
+overview:
+  description: "Storyblok CLI for managing spaces, components, stories, and content migrations"
+  primary_use: "Pull/push content and schemas between Storyblok spaces and local files"
+  authentication: "Personal Access Token stored in ~/.storyblok/credentials.json"
+  default_output_path: ".storyblok"
+
+authentication:
+  login_command: "storyblok login --token <PAT> --region <region>"
+  regions:
+    - eu
+    - us
+    - cn
+    - au
+  credential_storage: "~/.storyblok/credentials.json"
+  token_env_var: "STORYBLOK_PERSONAL_ACCESS_TOKEN"
+  note: "Preview token is for API access, Personal Access Token is for CLI"
+
+key_commands:
+  stories:
+    pull:
+      command: "storyblok stories pull --space <id> --path <dir>"
+      options:
+        - "--starts-with <path>  # Filter by story path"
+        - "--query <filter>      # Filter by content attributes"
+        - "--dry-run             # Preview without downloading"
+      output: "JSON files in .storyblok/stories/<space_id>/"
+    push:
+      command: "storyblok stories push --space <id> --path <dir>"
+      note: "Push local story JSON back to space"
+
+  components:
+    pull:
+      command: "storyblok components pull --space <id> --path <dir>"
+      output: "components.json with all block schemas"
+    push:
+      command: "storyblok components push <name> --space <id>"
+      note: "Push individual or all components"
+
+  types:
+    generate:
+      command: "storyblok types generate --space <id>"
+      prereq: "Must run 'components pull' first"
+      output: "TypeScript definitions for components"
+      options:
+        - "--separate-files  # One file per component"
+        - "--strict          # Stricter type checking"
+
+  migrations:
+    generate:
+      command: "storyblok migrations generate <component> --space <id>"
+      output: "Migration template JS file"
+    run:
+      command: "storyblok migrations run --space <id>"
+      options:
+        - "--dry-run    # Preview changes"
+        - "--publish    # all|published|published-with-changes"
+
+core_patterns:
+  space_content_backup:
+    description: "Pull all content from a space for backup/migration"
+    steps:
+      - "storyblok login --token $TOKEN --region eu"
+      - "storyblok stories pull --space <id> --path .storyblok"
+      - "storyblok components pull --space <id> --path .storyblok"
+    output_structure: |
+      .storyblok/
+        stories/<space_id>/*.json
+        components/<space_id>/components.json
+
+  typescript_types:
+    description: "Generate TypeScript types for Storyblok components"
+    steps:
+      - "storyblok components pull --space <id>"
+      - "storyblok types generate --space <id>"
+    usage: "Import generated types in React components for type safety"
+
+  cross_space_sync:
+    description: "Copy components between spaces"
+    command: "storyblok components push --space <target> --from <source>"
+
+  component_schema_management:
+    description: "Version control component schemas"
+    workflow:
+      - "Pull components from space: storyblok components pull --space <id>"
+      - "Edit schema JSON files locally"
+      - "Push changes: storyblok components push --space <id>"
+      - "Commit to git for version history"
+
+custom_migration_cli:
+  description: "Project uses a custom migration CLI (commander-based), not the standard storyblok CLI"
+  entry_point: apps/migration/src/cli.ts
+  runtime: "npx tsx (also works with bun)"
+  commands:
+    migrate: "npx tsx src/cli.ts migrate --country <code> [--dry-run] [--verbose] [--limit N] [--asset-mapping <path>] [--id-mapping <path>]"
+    migrate_dk_leaf: "npx tsx src/cli.ts migrate-dk-leaf --country <code> [--dry-run] [--verbose] [--asset-mapping <path>]"
+    migrate_dk_pages: "npx tsx src/cli.ts migrate-dk-pages --country <code> [--dry-run] [--verbose] [--asset-mapping <path>] [--id-mapping <path>] [--limit N]"
+    migrate_dk_media_leaf: "npx tsx src/cli.ts migrate-dk-media-leaf --country <code> [--dry-run] [--verbose] [--asset-mapping <path>] [--merge-mapping]"
+    build_contentid_mapping: "npx tsx src/cli.ts build-contentid-mapping --source-csv <path> --country <code> [--id-mapping <path>]"
+    build_node_mapping: "npx tsx src/cli.ts build-node-mapping --country dk --source <sql-dump-path>"
+    fix_folder_names: "npx tsx src/cli.ts fix-folder-names --country dk [--dry-run]"
+    rebuild_id_mapping: "npx tsx src/cli.ts rebuild-id-mapping --country dk (queries Storyblok API for meta_data.ibexa_remote_id)"
+    validate_dk: "npx tsx src/cli.ts validate-dk --country dk [--verbose] [--skip-asset-check]"
+    audit_schemas: "npx tsx src/cli.ts audit-schemas [--baseline dk] [--verbose]"
+    compare_dk: "npx tsx src/cli.ts compare-dk [--limit N] [--skip-crawl] [--verbose] [--output-dir <path>] [--stories-dir <path>] [--country <code>]"
+  dry_run_output: "apps/migration/logs/dry-run-<country>-<timestamp>.json"
+  test_command: "npx vitest run"
+  site_comparison_pipeline:
+    description: "6-step pipeline comparing Storyblok extracted content against live site crawl"
+    entry_point: apps/migration/src/site-comparison/run-comparison.ts
+    steps:
+      - "Extract Storyblok content from .storyblok/stories/{spaceId}/*.json"
+      - "Fetch live sitemap from {baseUrl}/sitemap.xml"
+      - "Match URLs bidirectionally (storyblok slugs vs live URLs)"
+      - "Crawl matched live pages with Playwright (2 req/sec, respects robots.txt)"
+      - "Compare extracted vs crawled content (text, images, links)"
+      - "Generate JSON + markdown gap reports"
+    output_files:
+      - "data/{country}-storyblok-extracted/ (one JSON per extracted page)"
+      - "data/{country}-sitemap-urls.json"
+      - "data/{country}-url-matching.json (matched/liveOnly/storyblokOnly)"
+      - "data/{country}-live-crawl/ (one JSON per crawled page)"
+      - "reports/{country}-gap-report.json"
+      - "reports/{country}-gap-report.md"
+    key_flags:
+      skip_crawl: "--skip-crawl reuses existing crawl data (saves time on re-runs)"
+      limit: "--limit N processes only first N matched pages (smoke test)"
+      verbose: "--verbose shows per-step progress"
+    known_false_positive_sources:
+      - "Soft hyphens (\\u00AD) in Danish text -- handled by normalizeText()"
+      - "CDN .webp suffix on live images -- handled by normalizeImageFilename()"
+      - "Leaf/shared content bloks (faq_item, push_card, link, etc.) show as storyblok-only because they have no live URL"
+      - "PIM product pages show as live-only because they are excluded from CMS migration"
+      - "URL structure changes during migration cause editorial pages to appear in both live-only and storyblok-only"
+    gate_criteria: "Zero critical discrepancies after triage = PASS"
+  full_dk_pipeline:
+    description: "Run all 3 DK migration steps to rebuild complete dk-id-mapping.json"
+    safety_gates:
+      - "Verify STORYBLOK_SPACE_ID is dev/staging (not production)"
+      - "Backup: cp data/dk-id-mapping.json data/dk-id-mapping.json.backup-$(date +%Y%m%d%H%M%S)"
+      - "Dry-run all 3 commands first, abort if errors"
+    steps:
+      - "npx tsx src/cli.ts migrate-dk-leaf --country dk  # 52 leaf entries (link, faq, push_card, header, footer, etc.)"
+      - "npx tsx src/cli.ts migrate-dk-pages --country dk  # 168 page entries (131 page + 37 article; home may 422 if exists)"
+      - "npx tsx src/cli.ts migrate-dk-media-leaf --country dk --merge-mapping  # 324 media leaf entries (245 push_card, 28 faq, 25 key_facts, 23 testimonial, 3 link)"
+    expected_total: "544 entries (target range: 500-600)"
+    per_component_distribution:
+      link: 47
+      faq_item: 29
+      push_card: 246
+      news_category: 2
+      store_locator: 1
+      header: 1
+      footer: 1
+      contact_bubble: 1
+      page: 131
+      article: 37
+      testimonial_item: 23
+      key_facts_item: 25
+  pipeline_architecture:
+    source: "ibexa-export/content_Exhausto-DK.yml (862+ items)"
+    source_cms_only: "ibexa-export/content_Exhausto-DK-cms-only.yml (225 items, pre-filtered)"
+    transformer_routing: "apps/migration/src/transformer/index.ts (transformItem function)"
+    content_types_handled: [home, editorial_page, landing_page, news_page, article, product, category, document, software, product_range, header, footer, link, faq, testimonial, key_facts, multiple_push_item, news_category, store_locator, contact_bubble]
+    skip_types: [folder, user, user_group, design_configuration, nextpage_configuration, site_configuration, mailer_configuration, my_products, header_element, header_product]
+    key_components:
+      - "ezpage-parser.ts: parseEzpageBlocks() converts ezpage zones/blocks to Storyblok blok arrays"
+      - "reference-resolver.ts: 3-step resolution chain (remoteId, contentId, nodeId) to Storyblok UUIDs"
+      - "folder-hierarchy.ts: buildLocationTree() and getFolderPath() reconstruct Ibexa folder tree"
+      - "richtext.ts: convertRichtext(input, resolver?) converts Ibexa richtext XML to Storyblok richtext JSON; optional AssetResolver resolves ezcontent:// image embeds. wrapPlainTextAsRichtext() wraps plain strings in richtext doc format"
+      - "transformer resolver wiring: all convertRichtext() calls in page/article/category transformers must pass resolver param to resolve embedded images in richtext (6 call sites total, wired in Story 4.14)"
+      - "field-auditor.ts: reports unmapped fields per content type"
+    upsert_strategy: "upsertStoryByExternalId (idempotent by external_id = Ibexa remoteId)"
+    slug_deduplication: "deduplicateSlug() appends -2, -3 etc. within same folder"
+    folder_routing: "CONTENT_FOLDER_MAP in transformer/index.ts maps content types to subfolder paths"
+  known_integration_gaps:
+    reference_resolver_not_wired:
+      description: "RESOLVED: cli.ts migrate command now auto-detects dk-id-mapping.json and creates a ReferenceResolver"
+      status: resolved
+    folder_hierarchy_not_wired:
+      description: "RESOLVED: migrate and migrate-dk-pages now use buildLocationTree/getFolderPath for folder routing"
+      status: resolved
+    id_mapping_incomplete:
+      description: "RESOLVED (rebuilt to 545 entries via rebuild-id-mapping CLI)"
+      status: resolved
+    home_page_422:
+      description: "Home page 'EXHAUSTO DK' gets 422 on re-migration when is_startpage story already exists at root"
+      impact: "Home page entry missing from dk-id-mapping.json (544 instead of 545)"
+      workaround: "Acceptable - home page already exists in Storyblok, just not in the mapping"
+    richtext_asset_resolver_not_wired:
+      description: "RESOLVED (Story 4.14): convertRichtext() calls in all transformers and ezpage-parser now forward AssetResolver for embedded image resolution"
+      status: resolved
+    remaining_unresolvable: "youtube_video(19), product_thumbnail(33), pim_product(12), cross_country_content(10), not_in_any_export(13), content_link(2), my_products(1), file(1), no_mapping(5), nid_dead(3)"
+  reference_resolver:
+    file: "apps/migration/src/transformer/reference-resolver.ts"
+    resolution_chain:
+      step1: "Direct remoteId -> IDMapping -> storyblok_uuid"
+      step2: "contentIdMapping[numericId] -> remoteId -> IDMapping -> storyblok_uuid"
+      step3: "nodeIdMapping[nodeId] -> contentObjectId -> contentIdMapping -> remoteId -> IDMapping -> storyblok_uuid"
+    collision_safety: "nodeIdMapping kept SEPARATE from contentIdMapping (same integer space, different semantics)"
+  node_mapping_data:
+    dk_nodeid_mapping: "apps/migration/data/dk-nodeid-mapping.json (69181 entries, node_id -> contentobject_id)"
+    dk_contentid_mapping: "apps/migration/data/dk-contentid-mapping.json (30800 entries, contentobject_id -> remoteId)"
+    dk_id_mapping: "apps/migration/data/dk-id-mapping.json (544 entries, remoteId -> storyblok_uuid) -- COMPLETE"
+    dk_known_gaps: "apps/migration/data/dk-known-gaps.json (80 entries, documents all unresolvable Ibexa content references categorized by gap type)"
+  known_bugs_fixed:
+    folder_manager_root_lookup:
+      description: "FolderManager.ensureFolder used with_parent: parentId || undefined which sent undefined for root (parentId=0)"
+      impact: "Root folder lookup failed, then create failed with 422 because folder already existed"
+      fix: "Use explicit with_parent=0 for root-level folder listing"
+    folder_manager_unicode_slugs:
+      description: "FolderManager passed raw folder names with unicode chars (e.g., Losninger) as API slug"
+      impact: "Storyblok rejected non-ASCII slugs with 422 Unprocessable Content"
+      fix: "Import generateSlug and slugify folder names before API calls; keep raw name as display name"
+  e2e_validation_dk:
+    total_items: 864
+    leaf_items: 52
+    page_items: 169
+    media_leaf_items: 324
+    dk_id_mapping_entries: 544
+    page_like_items: "169 (131 page + 37 article + 1 home)"
+    distinct_blok_types: 25
+    unknown_block_warnings: "97 (18 distinct types)"
+    tests: "554 pass, 0 fail (36 test files)"
+    reference_resolution: "223/402 resolved (55.5%), 179 unresolved (all accepted exceptions)"
+  dk_leaf_migration_results:
+    total_stories: 52
+    failed: 0
+    per_type_counts: "link:44, faq_item:1, push_card:1, news_category:2, store_locator:1, header:1, footer:1, contact_bubble:1"
+    folders_created: "shared, shared/links, shared/faq, shared/testimonials, shared/key-facts, shared/cards, shared/news-categories, global"
+    rate_limiting: "no 429 errors at 170ms default delay"
+    header_content: "4 menu_elements with titles: Losninger, Produkter, Service & Support, Engineering Air"
+    footer_content: "column1:6, column2:0 (PIM gap), column3:2, column4:4 items with titles; social_networks:2; sublinks:1"
+  dk_leaf_migration_rerun_story417:
+    date: "2026-02-19"
+    total_stories: 52
+    created: 0
+    updated: 52
+    failed: 0
+    idempotent: true
+    header_verification:
+      menu_elements_count: 4
+      menu_element_titles: ["Losninger", "Produkter", "Service & Support", "Engineering Air"]
+      column_data_present: true
+      corporate_links_count: 4
+      icons_count: 3
+      baseline_count: 0
+    footer_verification:
+      column1_links_count: 6
+      column2_links_count: 0
+      column3_links_count: 2
+      column4_links_count: 4
+      social_networks_count: 2
+      sublinks_count: 1
+      column_labels: ["Losninger", "Produkter", "Service & Support", "Engineering Air"]
+    known_limitations:
+      footer_column_link_titles_empty: "Footer column_links reference editorial_page items (not link items). buildInlineLinkBlok reads 'name' field which is undefined on editorial_pages (they use 'title'). Titles come out as empty strings."
+      footer_column2_empty: "Column2 links reference PIM category items (product-related) not in CMS-only YAML export. These items have EXHAUSTODK_c_## remoteIds."
+      id_mapping_overwrite: "migrate-dk-leaf OVERWRITES dk-id-mapping.json (52 entries). Must re-run migrate-dk-pages and migrate-dk-media-leaf to rebuild full 544-entry mapping."
+    content_id_mapping_loaded: true
+    content_id_mapping_entries: 30800
+  dk_page_migration_live_results:
+    total_pages: 169
+    created: 0
+    updated: 168
+    failed: "1 (home page 422 -- known issue, home page already exists in Storyblok)"
+    total_blocks: "674 across 25 block types"
+    top_blocks: "richtext_block:196, button_cta:87, card_grid:82, two_columns:82, illustrated_benefits:67, video:42"
+    folders_created: 28
+    idempotent: true
+    asset_resolution: "267/425 (62.8% total, known gaps account for ~158 unresolved)"
+    ezcontent_remaining: "0 (unresolvable images stripped, 23 documented in dk-unresolved-images.json)"
+    id_mapping_total: "545 entries after rebuild-id-mapping"
+  story_4_15_fixes_applied:
+    buildInlineLinkBlok: "Falls back to title/short_title when name field missing; creates internal_link for page-type items"
+    convertEzembed: "Returns null for unresolvable images instead of leaving ezcontent:// in output"
+    isXmlString_guard: "Prevents raw XML fallback in mapTwoColumnsBlock when richtext conversion strips all content"
+    dk_known_gaps: "112 total documented exclusions across 13 categories including PIM, cross-country, deleted content, unresolvable images"
+
+best_practices:
+  - "Always use --dry-run first for migrations"
+  - "Pull components before generating types"
+  - "Store space ID in env var for consistency"
+  - "Use --region flag matching your space's region"
+  - "Keep .storyblok/ in version control for team sync"
+  - "Generate types after every component schema change"
+  - "Use separate spaces for dev/staging/prod"
+
+common_pitfalls:
+  - "Using Preview token instead of Personal Access Token for CLI"
+  - "Forgetting --region flag (defaults may not match your space)"
+  - "Running migrations without backup (always pull first)"
+  - "Confusing stories (content) with components (schemas)"
+  - "Not regenerating types after schema changes"
+  - "Folder slugs must be URL-safe: Storyblok API returns 422 for unicode chars in slug field"
+  - "Root-level folder listing: with_parent must be 0 (not undefined) to list only root stories"
+  - "Home page with is_startpage=true may 422 if root story already exists in the space"
+  - "migrate-dk-leaf OVERWRITES dk-id-mapping.json (not merge). Must re-run migrate-dk-pages + migrate-dk-media-leaf --merge-mapping after to rebuild full mapping."
+  - "Footer column_links reference editorial_page items, not link items. buildInlineLinkBlok reads 'name' field from link items; editorial_pages use 'title'. Titles will be empty."
+  - "Footer column2_links may be empty if they reference PIM categories not in CMS-only export."
+
+environment_vars:
+  STORYBLOK_PERSONAL_ACCESS_TOKEN: "For CLI authentication"
+  STORYBLOK_TOKEN: "For SDK/API access (different from CLI)"
+  STORYBLOK_REGION: "Space region (eu, us, cn, au)"
+  STORYBLOK_SPACE_ID: "Target space ID"
+
+file_structure:
+  pulled_stories: ".storyblok/stories/<space_id>/<slug>_<uuid>.json"
+  pulled_components: ".storyblok/components/<space_id>/components.json"
+  migrations: ".storyblok/migrations/"
+  rollbacks: ".storyblok/rollbacks/"
+  generated_types: "storyblok-component-types.d.ts"
+
+migration_workflow:
+  description: "Safe content migration process"
+  steps:
+    - "Backup: Pull all stories and components"
+    - "Generate migration: storyblok migrations generate <component>"
+    - "Edit migration file in .storyblok/migrations/"
+    - "Dry run: storyblok migrations run --dry-run"
+    - "Execute: storyblok migrations run --publish published"
+    - "Verify: Pull stories again and compare"
+
+space_configuration:
+  description: "CLI space setup and management"
+  commands:
+    list_spaces: "storyblok spaces list"
+    space_info: "storyblok spaces info --space <id>"
+  notes:
+    - "Space configuration changes require Management API"
+    - "CLI focuses on content and component operations"
+
+pulled_story_json_structure:
+  description: "Structure of story JSON files pulled via storyblok stories pull"
+  root_level: true
+  note: "Data is at ROOT level of JSON file (NOT nested under a 'story' key)"
+  key_fields:
+    slug: "URL slug segment"
+    full_slug: "Full path from root (e.g. dk/section/page-name)"
+    uuid: "Unique identifier"
+    is_folder: "true for folder entries (no component, skip for content extraction)"
+    content_component: "content.component -- type identifier (page, article, home, product, etc.)"
+    content_body: "content.body -- array of blok objects (the page content)"
+    meta_data: "meta_data.ibexa_remote_id, meta_data.ibexa_content_type"
+  richtext_format: "TipTap doc format: {type: 'doc', content: [{type: 'paragraph', content: [{text: '...', type: 'text'}]}]}"
+  richtext_field_names: ["content", "rigth_content", "introduction_richtext", "description", "intro"]
+  image_formats:
+    richtext_inline: "{type: 'image', attrs: {alt: '...', src: '//a.storyblok.com/f/SPACE/SIZE/HASH/FILENAME'}}"
+    asset_field: "{fieldtype: 'asset', filename: '//a.storyblok.com/f/SPACE/SIZE/HASH/FILENAME', alt: '...'}"
+    numeric_ref: "string number like '62681' -- unresolved Ibexa asset ID"
+  link_formats:
+    richtext_mark: "{type: 'link', attrs: {href: '...', target: '...', linktype: 'url'}}"
+    multilink: "{fieldtype: 'multilink', linktype: 'story', cached_url: '...', _pending_relation: '...'}"
+    uuid_ref: "Direct UUID string in fields like int_link"
+    numeric_ref: "Numeric string in fields like cta_int_link_1"
+  unresolved_links:
+    ezlocation: "122 ezlocation:// references (Ibexa location IDs, not resolvable)"
+    pending_relations: "multilink fields with _pending_relation numeric IDs"
+  dk_component_distribution:
+    page_types: "page(187), article(39), home(1)"
+    leaf_types: "push_card(246), link(47), faq_item(29), key_facts_item(25), testimonial_item(23)"
+    pim_types: "product(3), product_catagory(2) -- note misspelling"
+    folders: "14 entries with is_folder=true"
+    total: 623
+  blok_types_in_body: ["richtext_block", "two_columns", "illustrated_benefits", "card_grid", "quick_actions", "faq_block", "button_cta", "photo_advantages", "centered_image", "video", "teaser", "contact_block", "contact_cta", "testimonial_block", "key_facts_block", "news_highlights", "spacer", "feature", "infographic", "grid", "form_embed", "custom_html", "multi_content", "social_carousel", "solution_components", "anchor_navigation", "logo_card_grid", "project_reference", "video_gallery"]
+  pim_exclusion_note: "product_catagory (misspelling in Storyblok) vs product_category (corrected in transformer). Exclusion list must include BOTH spellings."

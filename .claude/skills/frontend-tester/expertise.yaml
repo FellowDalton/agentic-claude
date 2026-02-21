@@ -1,0 +1,249 @@
+# Frontend Tester Expertise
+# UI testing with playwright-cli browser automation
+# Last validated: 2026-02-13
+
+domain: frontend-tester
+purpose: UI testing using playwright-cli browser automation and visual verification
+
+scope:
+  - Browser automation via playwright-cli
+  - Console error detection
+  - Form validation testing
+  - User flow verification
+  - Visual regression testing
+  - Screenshot comparison
+  - Network request validation
+  - Request mocking
+  - Video recording
+  - Tracing
+
+browser_automation:
+  tool: playwright-cli
+  install: "playwright-cli install --skills && playwright-cli install-browser"
+  allowed_tools_pattern: "Bash(playwright-cli:*)"
+
+  capabilities:
+    - Navigate to URLs (open, goto, go-back, go-forward, reload)
+    - Click elements by ref (click, dblclick)
+    - Fill form inputs (fill, select, check, uncheck)
+    - Type text and press keys (type, press, keydown, keyup)
+    - Take screenshots (screenshot, screenshot <ref>)
+    - Read page structure (snapshot)
+    - Execute JavaScript (eval)
+    - Monitor console messages (console, console error)
+    - Track network requests (network)
+    - Mock network requests (route)
+    - Record video (video-start, video-stop)
+    - Capture traces (tracing-start, tracing-stop)
+    - Manage storage state (state-save, state-load)
+    - Manage cookies (cookie-list, cookie-get, cookie-set)
+    - Manage localStorage/sessionStorage
+    - Resize viewport (resize)
+    - Multi-tab workflows (tab-new, tab-list, tab-select, tab-close)
+    - Handle dialogs (dialog-accept, dialog-dismiss)
+
+testing_categories:
+  console_errors:
+    description: Detect JavaScript errors and warnings
+    approach:
+      - "playwright-cli open <url>"
+      - "playwright-cli screenshot (baseline)"
+      - "playwright-cli console error (errors only)"
+      - "playwright-cli console (broader view if needed)"
+      - "playwright-cli network (check failed requests)"
+      - Report with context
+    severity_mapping:
+      error: critical
+      warning: medium
+      info: low
+
+  form_validation:
+    description: Test form input validation
+    test_cases:
+      - Empty required fields
+      - Invalid email formats
+      - Min/max length boundaries
+      - Pattern mismatches
+      - Submit behavior
+    approach:
+      - "playwright-cli open <form_url>"
+      - "playwright-cli snapshot (find form field refs)"
+      - "playwright-cli click <submit_ref> (empty submission)"
+      - "playwright-cli screenshot (capture validation errors)"
+      - "playwright-cli fill <ref> \"invalid-data\" (test invalid input)"
+      - "playwright-cli click <submit_ref>"
+      - "playwright-cli console error (check for JS errors)"
+      - "playwright-cli fill <ref> \"valid@email.com\" (test valid input)"
+      - "playwright-cli click <submit_ref>"
+      - "playwright-cli network (verify API call)"
+    note: "Check console after each submit"
+
+  user_flows:
+    description: End-to-end user journey testing
+    common_flows:
+      - Navigation paths
+      - Authentication flows
+      - Form submissions
+      - Search functionality
+      - Cart/checkout processes
+    approach:
+      - "playwright-cli open <start_url>"
+      - "playwright-cli video-start (optional recording)"
+      - "playwright-cli snapshot (find interactive elements)"
+      - Execute step by step with click/fill/type
+      - "playwright-cli screenshot at each step"
+      - "playwright-cli video-stop <filename>.webm (save recording)"
+      - Verify expected state at each step
+
+  visual_regression:
+    description: Screenshot comparison for visual changes
+    approach:
+      - "playwright-cli open <url>"
+      - "playwright-cli screenshot --filename=baseline.png"
+      - Run comparison after changes
+      - Highlight visual differences
+      - Report threshold violations
+    thresholds:
+      strict: 0.01
+      normal: 0.05
+      lenient: 0.10
+
+  responsive_testing:
+    description: Test across viewport sizes
+    breakpoints:
+      mobile: [375, 667]
+      tablet: [768, 1024]
+      desktop: [1440, 900]
+    approach:
+      - "playwright-cli open <url>"
+      - "playwright-cli resize 375 667"
+      - "playwright-cli screenshot --filename=mobile.png"
+      - "playwright-cli resize 768 1024"
+      - "playwright-cli screenshot --filename=tablet.png"
+      - "playwright-cli resize 1440 900"
+      - "playwright-cli screenshot --filename=desktop.png"
+
+  network_debugging:
+    description: Debug API integration issues
+    approach:
+      - "playwright-cli open <url>"
+      - Trigger action that makes API call
+      - "playwright-cli network"
+      - Check status codes and response data
+      - "playwright-cli console error (cross-reference)"
+
+  request_mocking:
+    description: Mock API responses for testing edge cases
+    approach:
+      - "playwright-cli route \"https://api.example.com/**\" --body='{\"mock\": true}'"
+      - "playwright-cli route \"**/*.jpg\" --status=404 (simulate failures)"
+      - "playwright-cli route-list (verify active mocks)"
+      - "playwright-cli unroute (remove all mocks)"
+
+workflow:
+  test_execution:
+    1: "playwright-cli open <target_url>"
+    2: "playwright-cli snapshot (understand page structure)"
+    3: Execute test steps using click/fill/type/press
+    4: "playwright-cli screenshot (capture evidence)"
+    5: "playwright-cli console (check for errors)"
+    6: Report results
+
+  evidence_collection:
+    - "Screenshots: playwright-cli screenshot --filename=<name>.png"
+    - "Console messages: playwright-cli console"
+    - "Network requests: playwright-cli network"
+    - "Page structure: playwright-cli snapshot --filename=<name>.yaml"
+    - "Video recording: playwright-cli video-start / video-stop"
+    - "Trace file: playwright-cli tracing-start / tracing-stop"
+
+project_specific:
+  schema_round_trip:
+    push: "cd apps/migration && npx tsx src/schemas/push-schemas.ts"
+    pull: "cd apps/migration && npx tsx src/schemas/pull-schemas.ts"
+    validate: "cd apps/migration && npx tsx src/schemas/validate-schemas.ts"
+    verify: "cd apps/migration && npx tsx src/schemas/verify-push.ts"
+    push_timeout: 300000
+    note: "Push script has 340ms rate limiting between API calls and auto-retries on 429. Allow 5 min timeout for 49+ components."
+  vitest_config:
+    include: ["tests/**/*.test.ts", "src/**/*.test.ts"]
+    note: "Schema block tests are in src/schemas/schema-blocks.test.ts, not in tests/ directory"
+
+learnings:
+  schema_testing:
+    - "Storyblok schema push/pull/validate is CLI-based, not browser-based - no playwright-cli needed"
+    - "vitest tests in src/schemas/schema-blocks.test.ts validate JSON schema structure against specifications"
+    - "The validate-schemas.ts script compares pulled Storyblok state against local JSON definitions - true round-trip verification"
+    - "Space has 55 total components after push: 18 root types, 37 nestable (includes legacy components like product_catagory, feature, grid, teaser)"
+  story_2_6_browser_testing:
+    - "When Storyblok published content is not available, fallback to build verification (next build) + vitest unit test verification"
+    - "Dev server starts on port 3000 and requires .env.local with NEXT_PUBLIC_STORYBLOK_TOKEN for content"
+    - "URL structure is /<country>/[[...slug]] where country is dk|se|no|de|en"
+    - "Without published Storyblok content, all pages return 404 (server component catches null story and calls notFound())"
+    - "Story 2.6 added 10 components (40 files): ContactBlock, ContactCta, CenteredImage, ProjectReference, SocialCarousel, MultiContent, CustomHtml, AnchorNavigation, DocumentCardGrid, ServiceBanner"
+    - "CustomHtml uses 'use client' + isomorphic-dompurify with DOMPurify.addHook for data: URI stripping"
+    - "All 10 component test files pass: 54 tests total, 0 failures"
+    - "Next.js 16 build succeeds with all components compiling for SSR"
+    - "Pre-existing TS errors exist in PushCard/QuickActions/SolutionComponents tests (missing link prop) but these are not related to Story 2.6"
+    - "contact_cta is registered in storyblok.ts but NOT in BlockResolver KNOWN_BLOCK_TYPES (child-only pattern)"
+
+output_format:
+  test_result:
+    - test_name: descriptive name
+    - status: pass | fail | skip
+    - duration: execution time
+    - evidence: screenshots, logs
+    - message: failure details if applicable
+
+playwright_cli_commands:
+  session:
+    - "open [url] - Launch browser (optionally navigate)"
+    - "close - Close browser"
+    - "tab-new [url] - Open new tab"
+    - "tab-list - List tabs"
+    - "tab-select <n> - Switch tab"
+    - "tab-close [n] - Close tab"
+  navigation:
+    - "goto <url> - Navigate to URL"
+    - "go-back - Browser back"
+    - "go-forward - Browser forward"
+    - "reload - Reload page"
+  page_reading:
+    - "snapshot - Get page accessibility tree with refs"
+    - "screenshot - Take screenshot"
+    - "screenshot <ref> - Screenshot specific element"
+    - "eval \"<js>\" - Execute JavaScript"
+  interactions:
+    - "click <ref> - Click element"
+    - "dblclick <ref> - Double-click"
+    - "hover <ref> - Hover over element"
+    - "fill <ref> \"<value>\" - Fill input"
+    - "select <ref> \"<value>\" - Select option"
+    - "check <ref> - Check checkbox"
+    - "uncheck <ref> - Uncheck checkbox"
+    - "type \"<text>\" - Type text"
+    - "press <Key> - Press key"
+    - "drag <from_ref> <to_ref> - Drag element"
+  debugging:
+    - "console - Read all console messages"
+    - "console error - Read only errors"
+    - "console warning - Read only warnings"
+    - "network - Read network requests"
+  recording:
+    - "video-start - Start video recording"
+    - "video-stop <file>.webm - Stop and save video"
+    - "tracing-start - Start trace capture"
+    - "tracing-stop - Stop and save trace"
+  storage:
+    - "state-save [file] - Save storage state"
+    - "state-load <file> - Load storage state"
+    - "cookie-list - List cookies"
+    - "cookie-get/set/delete - Manage cookies"
+    - "localstorage-list/get/set/delete - Manage localStorage"
+  mocking:
+    - "route \"<pattern>\" --body='<json>' - Mock response"
+    - "route \"<pattern>\" --status=<code> - Mock status"
+    - "route-list - List active mocks"
+    - "unroute [pattern] - Remove mocks"
+  viewport:
+    - "resize <width> <height> - Resize viewport"

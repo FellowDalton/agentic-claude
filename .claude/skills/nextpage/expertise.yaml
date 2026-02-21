@@ -1,0 +1,215 @@
+# Next.js Page/Route Creation Expertise
+version: "1.0"
+last_updated: "2026-02-13"
+
+overview:
+  description: "Next.js App Router page creation with PPR and Storyblok integration"
+  focus: "Routes, metadata, static params, and content fetching"
+
+app_router_patterns:
+  dynamic_routes:
+    catch_all: "[...slug]/page.tsx"
+    locale_prefix: "[locale]/[...slug]/page.tsx"
+    parameterized: "[locale]/products/[id]/page.tsx"
+
+  metadata:
+    static:
+      type: "export const metadata: Metadata"
+      fields: ["title", "description", "openGraph"]
+    dynamic:
+      function: "generateMetadata(props)"
+      params: "{ params }: { params: Promise<{ locale: string; slug: string[] }> }"
+      returns: "Promise<Metadata>"
+      async: true
+      cache: "PPR compatible"
+
+  static_params:
+    function: "generateStaticParams()"
+    returns: "Array of param objects"
+    purpose: "Pre-render routes at build time"
+
+ppr_patterns:
+  page_level:
+    directive: "'use cache'"
+    import: "import { cacheTag } from 'next/cache'"
+    tags:
+      - "story:{locale}:{slug}"
+      - "locale:{locale}"
+      - "page:{route}"
+    revalidation: "revalidateTag from next/cache"
+
+  data_fetching:
+    pattern: "Fetch in server component, cache with tags"
+
+storyblok_integration:
+  api_location: src/lib/storyblok
+  fetch_pattern: "getStoryblokApi().get()"
+  page_fetching:
+    api_call: "storyblokApi.get(`cdn/stories/${locale}/${slug}`)"
+    version_env: STORYBLOK_VERSION
+    default_version: "published"
+  preview_mode: "draftMode from next/headers"
+  component_rendering: "StoryblokComponent"
+
+pim_client:
+  location: src/lib/pim/
+  description: "TypeScript client for Nextpage PIM API — OAuth2 auth, 3 endpoints, discriminated union types"
+  portability: "Zero framework imports, native fetch only, relative imports — copy-portable to apps/pim-sync/"
+  files:
+    types: src/lib/pim/types.ts
+    config: src/lib/pim/config.ts
+    client: src/lib/pim/client.ts
+    barrel: src/lib/pim/index.ts
+    tests: [src/lib/pim/config.test.ts, src/lib/pim/client.test.ts]
+
+  auth:
+    endpoint: "{baseUrl}{context}/api/Auth"
+    method: POST
+    content_type: application/x-www-form-urlencoded
+    body_params: [username, password, grant_type=password]
+    response: { access_token, token_type, expires_in }
+    token_caching: "Cached with 60s buffer: Date.now() + (expires_in - 60) * 1000"
+    retry_on_401: "Clear token, re-authenticate, retry request once"
+
+  endpoints:
+    descendants_and_links:
+      path: /api/sdk/element/DescendantsAndLinks
+      method: POST
+      timeout: 900000
+      body: { ElementsExtIDs: [rootExtId], Paths: [], ContextID, OnlyOneLevel: "false", LangID, DCExtIDs: [] }
+      quirk: "OnlyOneLevel is string 'false' not boolean (per Postman export)"
+    elements_and_links:
+      path: /api/sdk/element/ElementsAndLinks
+      method: POST
+      timeout: 300000
+      body: { ElementsExtIDs: extIds, Paths: [], ContextID, LangID, DCExtIDs: [] }
+      note: "No OnlyOneLevel field unlike DescendantsAndLinks"
+    dico_carac:
+      path: /api/sdk/dicocarac/GetAll/{langId}
+      method: GET
+      note: "langId from config inserted into URL path"
+
+  value_types:
+    discriminant: TypeValue
+    variants:
+      - { TypeValue: 0, type: PimStandardValue, fields: [Value, ElementID, ElementExtID, DicoCaracID, DicoCaracExtID] }
+      - { TypeValue: 1, type: PimLinkValue, fields: [LinkedElements] }
+      - { TypeValue: 2, type: PimMultivaloValue, fields: "Values (PimMultivaloEntry array)" }
+      - { TypeValue: 101, type: PimSystemStatusValue, fields: "StatusID, StatusExtID, wfStatus" }
+      - { TypeValue: 104, type: PimSystemLastModifiedValue, fields: "LastModifiedDate, SqlSrvDateTime" }
+      - { TypeValue: other, type: PimSystemValue, fields: "index signature" }
+
+  error_handling:
+    wrapper: "PimResult<T> = { success: true, data: T } | { success: false, error: PimError }"
+    error_codes: [AUTH_FAILED, TIMEOUT, SERVER_ERROR, NETWORK_ERROR]
+    retry_logic:
+      401: "Clear token, re-auth, retry once"
+      network_error: "Catch TypeError from fetch, retry once"
+      5xx: "Return error wrapper, do NOT retry"
+
+  config:
+    env_vars: [PIM_BASE_URL, PIM_USERNAME, PIM_PASSWORD, PIM_CONTEXT, PIM_CONTEXT_ID, PIM_LANG_ID]
+    numeric_conversion: "PIM_CONTEXT_ID and PIM_LANG_ID converted from string to number"
+    validation: "Throws listing all missing vars"
+    danish_defaults: { baseUrl: "https://aldes2020-api-sec.nextpage.fr", context: "/dk", contextId: 27, langId: 26 }
+
+  testing:
+    framework: vitest + msw
+    handler_location: "Co-located in test files — PIM module is self-contained"
+    test_counts: { config: 2, client: 11, total: 13 }
+    mock_pattern: "server.use() to override default handlers per test"
+
+pim_field_mapping:
+  location: src/lib/pim/mapping/
+  validation_script: src/lib/pim/mapping/scripts/validate-fields.ts
+  field_map: src/lib/pim/mapping/field-map.ts
+  cross_reference_results:
+    api_product_fields: 27
+    ibexa_fields: 29
+    matched: 13
+    ibexa_only_computed: 16
+    api_only: 14
+
+  constants:
+    PRODUCT_FIELD_MAP: "13 entries mapping PIM API keys to Ibexa fields to Storyblok fields"
+    CATEGORY_FIELD_MAP: "9 entries for Family(category) elements"
+    RANGE_FIELD_MAP: "16 entries for ProductRange elements"
+    COMPUTED_FIELDS: "16 Ibexa-only fields"
+    API_ONLY_FIELDS: "14 fields in API not in Ibexa"
+    LANGUAGE_CONTEXT_MAP: "DK confirmed (contextId:27, langId:26), EN/DE/NO/SE TBD"
+
+  type_mismatch:
+    field: DC_P_CATEGORIEPRODUIT
+    api_type: "Multivalo (TypeValue=2)"
+    ibexa_type: "ezstring"
+    resolution: "Use multivalo_first transform"
+
+  cross_language:
+    variance_anomalies: 0
+    all_countries_field_count: 29
+    product_counts: { DK: 64, EN: 50, DE: 87, NO: 59, SE: 67 }
+
+  transform_types:
+    standard: "TypeValue=0 — extract Value string directly"
+    multivalo: "TypeValue=2 — extract Values[].Label as string array"
+    multivalo_first: "TypeValue=2, target is single string"
+    link: "TypeValue=1 — extract LinkedElements[].ElementExtID array"
+    url: "TypeValue=0, target is URL — wrap as {link: Value}"
+    boolean: "Derived from publication element fields"
+    reference_list: "Parse 'CODE || LABEL\\r' format"
+    custom: "Requires special handling logic"
+    none: "System fields, no transform needed"
+
+page_types:
+  static:
+    description: "Simple static page with no data fetching"
+    exports: ["metadata", "default function component"]
+
+  static_with_params:
+    description: "Static generation with known paths"
+    exports: ["generateStaticParams", "generateMetadata", "default async function"]
+
+  storyblok_page:
+    description: "Page backed by Storyblok story"
+    exports: ["generateStaticParams", "generateMetadata", "default async function"]
+    patterns:
+      - "'use cache' directive"
+      - "cacheTag for invalidation"
+      - "StoryblokComponent rendering"
+
+route_structure:
+  typical:
+    - "page.tsx (required)"
+    - "layout.tsx (if needed)"
+    - "loading.tsx (suspense boundary)"
+    - "error.tsx (error boundary)"
+    - "not-found.tsx (404 handling)"
+
+error_handling:
+  not_found:
+    import: "import { notFound } from 'next/navigation'"
+    usage: "Call notFound() when story/resource not found"
+  error_boundary: "error.tsx with 'use client'"
+  loading: "loading.tsx for streaming"
+
+common_imports:
+  - "import { Metadata } from 'next'"
+  - "import { cacheTag } from 'next/cache'"
+  - "import { getStoryblokApi, StoryblokComponent } from '@/lib/storyblok'"
+  - "import { notFound } from 'next/navigation'"
+
+key_files:
+  pages: "src/app/"
+  catch_all: "src/app/[locale]/[...slug]/page.tsx"
+  locale_layout: "src/app/[locale]/layout.tsx"
+  storyblok_lib: "src/lib/storyblok/index.ts"
+  pim_types: src/lib/pim/types.ts
+  pim_config: src/lib/pim/config.ts
+  pim_client: src/lib/pim/client.ts
+  pim_barrel: src/lib/pim/index.ts
+  field_map: src/lib/pim/mapping/field-map.ts
+  field_mapping_doc: src/lib/pim/field-mapping.md
+  validate_script: src/lib/pim/mapping/scripts/validate-fields.ts
+  product_fixture: src/lib/pim/mapping/__fixtures__/product-element.json
+  family_fixture: src/lib/pim/mapping/__fixtures__/family-element.json
+  range_fixture: src/lib/pim/mapping/__fixtures__/range-element.json

@@ -1,0 +1,163 @@
+# Frontend Validator Expertise
+# Read-only validation expert - NO code changes
+# Last validated: auto-generated
+
+domain: frontend-validator
+purpose: Read-only validation of frontend code against project standards
+
+scope:
+  - Next.js 16 pattern validation
+  - BEM CSS compliance checking
+  - Storyblok data transformation validation
+  - TypeScript strict mode compliance
+  - ESLint/Stylelint rule verification
+  - Import/export pattern validation
+
+constraints:
+  - READ-ONLY: Never modify any files
+  - Report findings only, do not fix
+  - Flag violations with file:line references
+
+validation_categories:
+  nextjs_patterns:
+    description: Next.js 16 App Router conventions
+    checks:
+      - Server vs Client component boundaries
+      - Metadata export patterns
+      - Dynamic route conventions
+      - Loading/error boundary placement
+      - Data fetching patterns (RSC vs client)
+      - Route segment config exports
+
+  component_structure:
+    description: Block component folder layout
+    pattern: "src/components/blocks/{PascalName}/{PascalName}.tsx + .module.css + .test.tsx + index.ts"
+    checks:
+      - Directory name matches component name (PascalCase)
+      - index.ts exports default from ./{Component}
+      - .module.css uses BEM class names matching kebab-case block name
+      - .test.tsx uses vitest + @testing-library/react
+      - No extra files in directory
+
+  bem_css:
+    description: BEM naming convention with CSS Modules
+    pattern: "block-name__element--modifier"
+    module_usage: "styles['block-name__element'] (bracket notation, not dot)"
+    design_tokens_file: "src/styles/variables.css"
+    checks:
+      - Class naming follows BEM structure (kebab-case block, double-underscore element, double-hyphen modifier)
+      - All color/spacing/typography values use CSS custom properties from variables.css
+      - No raw hex colors, px spacing, or font values
+      - No Tailwind classes
+      - "CSS Modules imported as: import styles from './Component.module.css'"
+    known_debt:
+      - "--color-primary, --color-text-secondary, --font-size-sm, --font-size-lg are used across 12+ components but NOT defined in variables.css"
+      - "These resolve to initial values at runtime -- visual bugs expected"
+
+  storyblok_integration:
+    description: Storyblok SDK integration patterns
+    checks:
+      - "storyblokEditable(blok) spread on root element: {...storyblokEditable(blok)}"
+      - "Anchor id: id={blok.anchor || undefined} for optional anchor; id={blok.anchor} for required"
+      - "Child blocks rendered via StoryblokServerComponent with key={item._uid}"
+      - "Component registered in src/lib/storyblok.ts with snake_case key"
+      - "Block types added to BlockResolver KNOWN_BLOCK_TYPES set (except child-only components)"
+      - "Types imported from @/types/storyblok (centralized, not inline)"
+      - "Rich text rendered via render() from storyblok-rich-text-react-renderer with as any cast (known type mismatch)"
+    registration_files:
+      component_map: "src/lib/storyblok.ts"
+      block_resolver: "src/components/blocks/BlockResolver/BlockResolver.tsx"
+      type_definitions: "src/types/storyblok.d.ts"
+
+  typescript_strict:
+    description: TypeScript strict mode compliance
+    checks:
+      - No untyped any (explicit or implicit)
+      - Props interface defined with blok type from @/types/storyblok
+      - "KNOWN EXCEPTION: render(blok.field as any) for storyblok-rich-text-react-renderer -- requires eslint-disable-next-line comment"
+      - Null/undefined handling with optional chaining
+      - Interface extends SbBlokData for all blok types
+    known_debt:
+      - "PushCardBlok declared twice in storyblok.d.ts (lines 173 and 320) -- causes 15 TS errors in Story 2.5 test files"
+    validation_command: "npx tsc --noEmit"
+
+  security:
+    description: HTML sanitization and XSS prevention
+    checks:
+      - "CustomHtml (and any future raw HTML component) MUST use DOMPurify.sanitize() before dangerouslySetInnerHTML"
+      - "Must be use client component (DOMPurify requires browser APIs via isomorphic-dompurify)"
+      - "Must strip: script tags, event handlers, javascript: protocols, data: non-image protocols"
+      - "DOMPurify.addHook afterSanitizeAttributes for data: URI stripping"
+      - "Test coverage must include: script stripping, event handler stripping, protocol stripping, safe element preservation"
+      - "No unsanitized dangerouslySetInnerHTML anywhere in codebase"
+
+  test_coverage:
+    description: Vitest + React Testing Library test patterns
+    checks:
+      - "Mock: vi.mock(@storyblok/react/rsc) with storyblokEditable returning data-testid"
+      - "Mock: StoryblokServerComponent renders div with blok._uid as text"
+      - "Mock: vi.mock(storyblok-rich-text-react-renderer) for richtext components"
+      - "Every component must assert: storyblokEditable applied"
+      - "Components with anchor must assert: id attribute set"
+      - "Components with children must assert: child rendering via StoryblokServerComponent"
+      - "BEM class assertion via container.querySelector"
+      - "makeBlok() factory function pattern for test data"
+    validation_command: "npx vitest run src/components/blocks/"
+
+  linting:
+    description: ESLint compliance
+    tools:
+      - eslint: "npx eslint src/components/blocks/{Component}/ --max-warnings=0"
+    checks:
+      - No lint errors or warnings
+      - "Known suppression: eslint-disable-next-line @next/next/no-img-element on plain img tags"
+      - "Known suppression: eslint-disable-next-line @typescript-eslint/no-explicit-any on render() richtext calls"
+
+  accessibility:
+    description: Semantic HTML and accessibility patterns
+    checks:
+      - "Navigation components use semantic nav element"
+      - "Images have alt attributes from Storyblok asset field"
+      - "Phone links use tel: protocol, email links use mailto:"
+      - "Lists use proper ul/li structure"
+      - "Interactive components use Radix UI primitives"
+      - "No div-based buttons or links"
+
+output_format:
+  structure:
+    - category: validation category name
+    - severity: error | warning | info
+    - file: absolute file path
+    - line: line number
+    - rule: violated rule/pattern
+    - message: human-readable description
+    - evidence: code snippet
+
+commands:
+  full_validation: "Run all validation categories"
+  category_validation: "Run specific category only"
+  file_validation: "Validate specific file(s)"
+
+key_files:
+  component_map: "src/lib/storyblok.ts"
+  block_resolver: "src/components/blocks/BlockResolver/BlockResolver.tsx"
+  type_definitions: "src/types/storyblok.d.ts"
+  design_tokens: "src/styles/variables.css"
+  global_styles: "src/app/globals.css"
+  vitest_config: "vitest.config.ts"
+  test_setup: "tests/support/setup.ts"
+  reference_components:
+    grid_children: "src/components/blocks/QuickActions/QuickActions.tsx"
+    multiasset_gallery: "src/components/blocks/PhotoAdvantages/PhotoAdvantages.tsx"
+    client_component: "src/components/blocks/FaqBlock/FaqBlock.tsx"
+    link_resolution: "src/components/blocks/ButtonCta/ButtonCta.tsx"
+
+known_patterns:
+  child_only_components:
+    description: "Components rendered by parents via StoryblokServerComponent, never in page body directly"
+    examples:
+      - contact_cta
+      - push_card
+      - testimonial_item
+      - key_facts_item
+    rule: "Must be in storyblok.ts component map, must NOT be in BlockResolver KNOWN_BLOCK_TYPES"

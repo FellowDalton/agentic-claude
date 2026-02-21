@@ -1,0 +1,61 @@
+# Orchestration Workflow Mappings
+#
+# Maps story content patterns to team orchestration templates.
+# The sprint orchestrator uses this to decide which team structure
+# to deploy when launching parallel tracks via /plan_w_team.
+#
+# How to add a workflow:
+#   1. Add a new entry under `workflows:` with a unique key
+#   2. Set `description` to explain what the workflow builds
+#   3. Set `has_frontend: true/false` (affects port allocation)
+#   4. Add `patterns:` -- keywords matched case-insensitively against story content
+#   5. Optionally set `epics:` to restrict matching to specific epic numbers
+#   6. Set `orchestration:` to the path of the team template file
+#
+# Pattern matching rules:
+# - Patterns are matched case-insensitively against story content
+# - First matching workflow wins (order matters)
+# - If multiple patterns could match, more specific patterns are listed first
+# - If no patterns match, the `default` workflow is used
+
+workflows:
+  frontend-component:
+    description: "Component implementation with validation and testing"
+    has_frontend: true
+    patterns:
+      - "component"
+      - "widget"
+      - "accordion"
+      - "slider"
+      - "carousel"
+      - "video"
+      - "modal"
+      - "form"
+      - "card"
+      - "hero"
+      - "banner"
+      - "testimonial"
+      - "faq"
+    # epics: [2]  # Uncomment and set to restrict to specific epics
+    orchestration: ".claude/orchestration/example-workflow.md"
+
+  backend-api:
+    description: "API endpoint or service implementation with testing"
+    has_frontend: false
+    patterns:
+      - "api"
+      - "endpoint"
+      - "service"
+      - "integration"
+      - "webhook"
+      - "sync"
+      - "import"
+      - "export"
+      - "migration"
+      - "database"
+      - "auth"
+    # epics: [3]  # Uncomment and set to restrict to specific epics
+    orchestration: ".claude/orchestration/example-workflow.md"
+
+# Default workflow when no patterns match
+default: frontend-component

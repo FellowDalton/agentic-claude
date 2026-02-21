@@ -1,0 +1,1000 @@
+# TDD Expertise
+# Test-Driven Development workflow specialist
+# Last validated: 2026-02-19
+
+domain: tdd
+purpose: Guide test-driven development using RED-GREEN-REFACTOR cycle
+
+scope:
+  - Test-first development methodology
+  - RED-GREEN-REFACTOR cycle execution
+  - Failing test creation
+  - Minimal implementation strategies
+  - Refactoring with test coverage
+  - Test coverage analysis
+  - Test framework configuration
+
+core_principles:
+  red_phase:
+    description: Write a failing test first
+    rules:
+      - Test must fail before implementation
+      - Test must fail for the right reason
+      - Test should be specific and focused
+      - One behavior per test
+    anti_patterns:
+      - Writing passing tests
+      - Testing multiple behaviors
+      - Over-specifying implementation
+
+  green_phase:
+    description: Write minimal code to pass
+    rules:
+      - Simplest implementation that passes
+      - No premature optimization
+      - No extra functionality
+      - Just make it work
+    anti_patterns:
+      - Gold plating
+      - Implementing untested features
+      - Optimizing before passing
+
+  refactor_phase:
+    description: Improve code while tests pass
+    rules:
+      - Tests must stay green
+      - Small incremental changes
+      - Extract patterns and abstractions
+      - Remove duplication
+    anti_patterns:
+      - Changing behavior
+      - Adding features
+      - Skipping refactor phase
+
+workflow:
+  cycle:
+    1_red:
+      - Identify next behavior to implement
+      - Write test describing expected behavior
+      - Run test - confirm it fails
+      - Verify failure message is meaningful
+
+    2_green:
+      - Write minimal code to pass test
+      - Run test - confirm it passes
+      - Avoid over-engineering
+
+    3_refactor:
+      - Review code for improvements
+      - Extract common patterns
+      - Improve naming and structure
+      - Run tests - confirm still passing
+
+  setup_phase:
+    description: Create compilable types and config before RED phase
+    rules:
+      - Types file defines the interface contract for all tests
+      - Config file exports constants tests will assert against
+      - Run tsc --noEmit to verify compilation before handing off to test-writer
+      - Run vitest run to verify test discovery config works (expect 0 tests found)
+
+  multi_agent_tdd:
+    description: RED and GREEN phases assigned to different agents
+    roles:
+      test_writer: Creates failing tests (RED phase)
+      builder: Implements code to pass tests (GREEN phase)
+    coordination:
+      - Builder completes project setup first (types, config, build)
+      - Test-writer imports types to write tests against the contract
+      - Builder reads failing tests and implements minimal code to pass
+    prerequisites:
+      - Shared types.ts must be complete and compilable
+      - Config exports must be stable (tests will assert against constants)
+    concurrent_builder_pattern:
+      description: Builder creating production files while test-writer writes tests
+      observation: Some tests pass immediately (builder already implemented), some fail (module not found or behavioral mismatch)
+      valid_because:
+        - Tests that pass verify the implementation matches the specification
+        - Tests that fail with module-not-found are normal RED state
+        - Tests that fail with assertion mismatch catch real behavioral gaps
+      rule: Do not delete passing tests -- they are still valuable specifications
+      example: Story 4.5 had 8/15 tests passing and 7/15 failing on first run due to concurrent builder
+
+  quality_gate_pattern:
+    description: Two-step checksum approval gates destructive pipeline phases
+    steps:
+      - "Step 1 (default): Parse, validate, generate report, save sha256 checksum, EXIT"
+      - "Step 2 (re-run): Provide --approve-report <checksum> to unlock download/upload"
+    implementation:
+      - Compute sha256 of JSON report string
+      - Save checksum to separate file for reference
+      - Validate provided checksum matches before proceeding
+    tdd_relevance: Quality gate logic (checksum computation, comparison) can be unit tested in isolation; the orchestration flow that uses it is validated via CLI integration testing
+
+  porting_pattern:
+    description: "Port tests first, then production code (RED-GREEN for porting)"
+    steps:
+      - "RED: Copy test file, update imports (vitest->bun:test, path aliases->relative), run -- should fail with Cannot find module"
+      - "GREEN: Copy production files, update import paths, run -- all tests should pass"
+      - "REFACTOR: Review for cleanup, verify full suite still green"
+    conversion_checklist:
+      vitest_to_bun_test:
+        - "Replace import { ... } from 'vitest' with import { ... } from 'bun:test'"
+        - "Add MSW lifecycle hooks (beforeAll/afterAll/afterEach) since no setupFiles"
+        - "Update relative import paths (no path aliases in Bun apps)"
+        - "No .js extension needed on imports (Bun uses bundler moduleResolution)"
+    validation: Run both the ported tests AND the full suite to verify no regressions
+
+red_phase:
+  dynamic_import_existing_module:
+    description: "Existing module with missing export gives 'is not a function' not 'Cannot find module'"
+    failure_message: "TypeError: functionName is not a function"
+    distinct_from: "'Cannot find module' (which occurs when the entire module file is missing)"
+    example: "const { wrapPlainTextAsRichtext } = await import('./richtext.js'); // module exists but function undefined"
+    key_insight: Both are valid RED phase failures but have different error messages
+
+  worktree_dependency_setup:
+    description: "In git worktrees, node_modules may not be installed"
+    rule: "Run bun install before establishing test baseline"
+    symptom: "Cannot find package 'js-yaml' for existing tests that should pass"
+
+  stub_pattern:
+    description: Create stub modules so vitest discovers individual tests
+    why: "Without the module, vitest reports 'Failed to load url' and 0 tests discovered"
+    how: "Export every function signature with 'throw new Error(\"Not implemented: functionName\")'"
+    result: "Each test fails individually with meaningful 'Not implemented' error"
+    example: |
+      export function parseMediaYaml(_filePath: string): ImageEntry[] {
+        throw new Error('Not implemented: parseMediaYaml');
+      }
+
+  cross_module_integration:
+    description: Testing integration between new and existing modules
+    pattern: Import new module in test files that also import existing modules
+    expected_failure: "Failed to load url ./new-module.js - Does the file exist?"
+    key_insight: All tests in the file report 0 tests (not individual failures) because the import fails at module level
+    recommendation: Accept module-level import failure as valid RED state; builder creates module to enable individual test execution
+
+  component_import_failure:
+    description: Valid RED state for React component tests before implementation exists
+    failure_message: "Failed to resolve import \"./ComponentName\" from \"ComponentName.test.tsx\". Does the file exist?"
+    vitest_behavior: Reports 0 tests per file (module-level failure prevents test discovery)
+    stub_needed: "false -- unlike utility module tests, React component RED phase does not benefit from stubs because the test structure itself (describe blocks, it blocks) serves as the specification"
+    validation: "Run 'npx vitest run src/components/blocks/' and confirm 'N failed, 0 tests'"
+
+  dynamic_import_red_phase:
+    description: Use dynamic await import() for RED phase tests against non-existent modules
+    pattern: |
+      it('should do X', async () => {
+        const { targetFunction } = await import('./not-yet-created.js');
+        const result = targetFunction(input);
+        expect(result).toBe(expected);
+      });
+    advantages:
+      - Vitest discovers all tests individually (unlike top-level import which blocks all)
+      - Each test fails with 'Cannot find module' independently
+      - No stub files needed
+      - Tests can import from DIFFERENT non-existent modules in the same file
+    when: Writing RED phase tests for modules that will be created by another agent
+    confirmed_with:
+      - "new_module: 'Cannot find module ./ezpage-parser.js' (13 tests individually failing)"
+      - "new_module: 'Cannot find module ./reference-resolver.js' (10 tests individually failing)"
+      - "new_module: 'Cannot find module ./folder-hierarchy.js' (8 tests individually failing)"
+      - "existing_module_new_export: 'wrapPlainTextAsRichtext is not a function' (8 tests individually failing)"
+    total_red_tests_example: 41
+    all_existing_tests_still_pass: true
+
+  wiring_gap_red_phase:
+    description: "Test that an optional dependency is forwarded through call chains"
+    pattern: |
+      const resolver = new AssetResolver(mappingWithKnownEntry);
+      const result = transformPage(item, langCode, resolver);
+      const imageNodes = findNodes(result.content.intro, 'image');
+      expect(imageNodes.length).toBeGreaterThanOrEqual(1);
+      expect(imageNodes[0].attrs.src).toContain('storyblok.com');
+    failure_message: "expected 0 to be greater than or equal to 1"
+    why_it_fails: "Caller does not forward resolver to convertRichtext(), so ezembed elements return null"
+    distinct_from: "Module-missing or export-missing failures -- here the function works correctly when called directly, the gap is in the wiring"
+    key_insight: "Use real resolver with minimal mapping, not mocks. The test proves end-to-end flow, not individual function behavior."
+
+  private_function_export_red:
+    description: "Testing a private function that needs to be exported and extended"
+    failure_message: "TypeError: findItemByAnyId is not a function"
+    pattern: "const { findItemByAnyId } = await import('./dk-leaf-migration.js');"
+    fix_requires:
+      - Export the function
+      - Add new parameter (contentIdMapping)
+      - Implement new resolution strategy
+    key_insight: "Two changes needed in GREEN phase -- export + new param. Both must happen together for the test to pass."
+
+  field_name_bug_red:
+    description: "Testing field name mismatch between code and real data"
+    failure_message: "expected '' to be 'Losninger'"
+    pattern: "Production reads getFieldValue(fm, 'title', ...) but real data has fieldDefIdentifier: name"
+    fix: "Change getFieldValue call from 'title' to 'name'"
+    key_insight: "The fallback ?? '' makes the error subtle -- no crash, just empty output"
+
+  multi_bug_red_testing:
+    description: "Write isolated RED tests for each known bug in a module"
+    failure_modes:
+      not_exported: "TypeError: functionName is not a function"
+      wrong_field_name: "expected '' to be 'ExpectedValue'"
+      missing_parameter: "expected 0 to be N"
+    pattern:
+      - One describe block per bug
+      - Fixture includes the CORRECT data structure
+      - Assertions target the specific field/behavior that is broken
+    key_insight: "Different bugs in the same pipeline produce cascading failures -- test the leaf function first, then field mappers, then orchestrators"
+
+  schema_mismatch_red_testing:
+    description: "Test data transformation functions with actual data shape from upstream pipeline"
+    pattern:
+      - "Build fixture matching ACTUAL migration output (e.g. logo_banner not logo, menu_elements not navigation_items)"
+      - "Call existing transformer function with this fixture"
+      - "Assert on expected output shape"
+      - "Fails because transformer reads old field names that don't exist on the actual data"
+    failure_modes:
+      missing_field: "expected '' to be 'url'"
+      empty_array: "expected 0 to be >= 4"
+    when: "Frontend types and fetchers were written against assumed schema, then migration produces different field structure"
+
+  optional_constructor_param_red_phase:
+    description: "RED tests for extending an existing class with a new optional constructor parameter"
+    behavior: "TypeScript constructors silently ignore extra positional args not declared in the signature"
+    test_categories:
+      fails_correctly: "Tests that pass the new param AND assert behavior only achievable through it"
+      passes_correctly: "Priority ordering tests, null handling, backward-compat tests (existing-arg constructor still works)"
+    key_insight: "Some tests passing at RED phase is expected when testing priority ordering of existing vs new resolution steps"
+
+green_phase:
+  join_pattern:
+    description: Implement multi-source joins with lookup Map + single-pass iteration
+    steps:
+      - Build Map<key, bridgeRecord> from the linking data source
+      - Iterate each consumer data source, look up bridge record by key
+      - Populate output record only when bridge record exists and has required fields
+    anti_pattern: Nested loops or repeated array.find() calls across data sources
+
+  idempotent_merge:
+    description: Spread operator is the minimal merge implementation
+    pattern: "{ ...existing.ibexaUri, ...newMapping.ibexaUri }"
+    test_verification:
+      - Old entries preserved after merge
+      - New entries added after merge
+      - No overwrites of existing keys (spread order matters)
+    note: If overwrite prevention is needed, reverse spread order or use Object.assign with existing last
+
+  type_drift_handling:
+    description: Update test assertions when types evolve between RED and GREEN phases
+    when: Types are modified after tests were written (e.g. adding fieldtype, copyright fields)
+    rule: Builder updates assertions to match the CURRENT type definition, not the original
+    key_insight: The type definition is the source of truth, not the original test assertions
+    anti_pattern: Implementing code to match outdated test assertions instead of updating tests
+
+  threading_optional_deps:
+    description: Thread optional dependency through deep call chains for backward compatibility
+    pattern: "Add optional param at each level of the call chain"
+    examples:
+      - "convertRichtext(input, resolver?) -> parseNodes(xml, resolver?) -> parseElement(xml, resolver?)"
+      - "transformItem(item, country, logger, assetResolver?, referenceResolver?) -> transformPage -> parseEzpageBlocks"
+      - "ReferenceResolver chain: transformItem -> transformPage(item, lang, assetResolver?, referenceResolver?) -> parseEzpageBlocks(ezpage, referenceResolver?, assetResolver?)"
+    rules:
+      - Every function in the chain gets the optional param
+      - Functions that need it check if (resolver) before using
+      - Without the param, behavior is identical to before
+      - Multiple optional deps can be threaded independently through the same chain
+    anti_pattern: Module-level mutable state to avoid threading (fragile, not test-safe)
+
+  internal_replacement_pattern:
+    description: "Replace private function with imported module while keeping public API stable"
+    rules:
+      - Keep the public function signature identical (optional new params only)
+      - The internal function can be deleted entirely
+      - Existing tests that don't exercise the replaced path continue to pass
+
+  null_guard_fallback_chain:
+    description: "Chain nullable converters with fallback to wrapping function"
+    pattern: "const result = convertRichtext(raw) ?? (typeof raw === 'string' ? wrapPlainTextAsRichtext(raw) : undefined)"
+    test_verification: "Test all three paths: XML input, plain text input, null/object input"
+
+  resolver_class_pattern:
+    description: "Encapsulate lookup data in a class with typed resolve methods"
+    rules:
+      - Constructor takes raw mapping data (injected, not loaded internally)
+      - Static factory method for file-based construction
+      - resolve() returns nullable for single lookups
+      - resolveList() handles CSV parsing, null filtering internally
+
+  cli_auto_detect_pattern:
+    description: "Load optional dependency from explicit CLI flag or auto-detect from convention path"
+    rules:
+      - Explicit --flag path takes priority
+      - Convention-based auto-detection uses predictable naming (e.g. dk-id-mapping.json)
+      - Missing file is non-fatal
+
+  dual_folder_routing:
+    description: "Route items to folders using two strategies based on content type"
+    strategy_1_fixed: "CONTENT_FOLDER_MAP[contentType] -> static subfolder path for leaf types"
+    strategy_2_dynamic: "getFolderPath(item, locationTree) -> walk parent chain for page types"
+    key_insight: "Location tree must be built from full dataset, not the limited subset"
+
+  fallback_chain:
+    description: Implement multi-strategy resolution with precomputed indexes
+    pattern:
+      - Constructor builds indexes (Map) from raw mapping data
+      - resolve() tries each strategy in priority order
+      - First match returns immediately with strategy name
+      - "Final fallback returns { resolved: false, strategy: 'none' }"
+    implementation_detail: "Use Map<string, string[]> for filename index to detect ambiguous matches"
+    stats_tracking: Increment counters per strategy for resolution summary reporting
+
+  minimal_branching:
+    description: Add if-guard for new behavior, keep else as original code
+    pattern: |
+      if (imagePath && resolver) {
+        // NEW: resolve through asset resolver
+        const result = resolver.resolve(urlPicture, context);
+        if (result.resolved) content.image = result.asset;
+      } else if (imagePath) {
+        content.image_path = imagePath; // ORIGINAL: unchanged
+      }
+    rule: The else branch must be byte-for-byte identical to the original code
+    verification: Run existing test suite (tests/ dir) to confirm zero regressions
+
+test_patterns:
+  unit_tests:
+    description: Test isolated units
+    structure:
+      - "Arrange: Set up test data"
+      - "Act: Execute the behavior"
+      - "Assert: Verify the result"
+
+  integration_tests:
+    description: Test component interactions
+    approach:
+      - Test boundaries between units
+      - Mock external dependencies
+      - Verify contracts
+
+  concurrency_tests:
+    description: Test thread-safety with fcntl file locking
+    pattern:
+      - Create N threads calling the write function simultaneously
+      - Join all threads
+      - Assert no errors and exact expected count of results
+      - Assert file is valid (not corrupt JSON, no lost writes)
+    critical_gotcha: "fcntl.flock() is per-process, NOT per-thread. Always pair with threading.Lock() for intra-process safety (see port_registry.py pattern). This covers both multi-process (fcntl) and multi-thread (Lock) scenarios regardless of GIL status."
+    example_files:
+      - adws/tests/test_issue_tracker.py
+      - adws/tests/test_port_registry.py
+
+  static_analysis_tests:
+    description: Use AST parsing to verify code invariants at test time
+    pattern:
+      - Parse source files with ast.parse()
+      - Walk AST nodes to find target patterns (e.g. subprocess.run calls)
+      - Assert invariant holds for every match (e.g. timeout kwarg present)
+      - "Report file:line for each violation"
+    example_file: adws/tests/test_subprocess_timeouts.py
+    use_cases:
+      - Verify all subprocess.run() calls have timeout parameters
+      - Ensure all API calls have error handling
+      - Check all functions have docstrings
+
+  regex_parsing_tests:
+    description: Test string parsing with edge cases
+    pattern:
+      - Test happy path for each supported format
+      - Test edge cases (empty string, None-like, malformed input)
+      - Test return value for unrecognized input (None or error)
+    example_file: adws/tests/test_url_parsing.py
+
+  behavior_bug_assertion:
+    description: "Assert type of output field to catch 'stores raw string instead of structured object'"
+    pattern: "expect(typeof result.content.intro).toBe('object')"
+    use_case: "When a transformer should wrap plain values in structured format"
+
+  boolean_string_coercion_testing:
+    description: "Test both boolean and string representations of boolean values from YAML/JSON exports"
+    pattern:
+      - "Test with visible: false (boolean) -> skipped"
+      - "Test with visible: 'false' (string) -> skipped"
+      - "Test with visible: 'true' (string) -> included"
+
+  hierarchical_factory_pattern:
+    description: "Compose factory functions to build deeply nested test fixtures (zones->blocks->attributes)"
+    pattern: "makeEzpage(blocks) -> makeBlock(type, attributes) -> each factory builds one level"
+    example_files: [apps/migration/src/transformer/ezpage-parser.test.ts, apps/migration/src/transformer/folder-hierarchy.test.ts]
+
+  shell_script_test_framework:
+    description: "Bash test framework for infrastructure/coverage validation"
+    pattern:
+      - "Define pass() and fail() helpers that increment counters"
+      - "set -uo pipefail (not -e, since failures tracked by counters)"
+      - "Return 1 from main() when TESTS_FAILED > 0"
+      - "Support --report-only flag for non-failing diagnostic runs"
+    validation: "bash -n script.sh for syntax check before execution"
+    example_file: tests/expert-coverage.sh
+
+  yaml_field_grep_validation:
+    description: "Validate YAML field presence via grep without a YAML parser"
+    critical_gotcha: "Bare field names like 'patterns:' match compound names like 'css_patterns:' unless indentation is constrained"
+
+  chain_resolution_testing:
+    description: "Testing a multi-step resolution chain (A -> B -> C -> D) requires testing each break point"
+    pattern:
+      - "Happy path: full chain resolves end-to-end"
+      - "Break at each step: missing mapping at step N -> falls through to step N+1 or returns null"
+      - "Priority test: key exists in multiple steps -> earlier step wins"
+      - "Collision test: same key in different mappings -> correct one selected by priority"
+    example: "nodeId->contentObjectId->remoteId->UUID with separate nodeIdMapping, contentIdMapping, idMapping"
+    integration_test: "Verify resolution works through full transform pipeline, not just resolver class"
+
+  yaml_fixture_testing:
+    description: "Write YAML fixtures to temp directories for testing parse functions"
+    pattern: |
+      let tmpDir: string;
+      beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-prefix-')); });
+      afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+      function writeYaml(filename: string, items: any[]): string {
+        const filePath = path.join(tmpDir, filename);
+        fs.writeFileSync(filePath, yaml.dump(items), 'utf-8');
+        return filePath;
+      }
+    use_cases:
+      - Content type extraction from YAML exports
+      - Block type extraction from ezpage fields in YAML
+      - Schema audit diffing across country exports
+    factory_composition: "makeItem(contentType, remoteId, fields) + makeEzpageField(langCode, blocks)"
+    example_file: apps/migration/src/audit/country-schema-audit.test.ts
+
+  cross_country_diff_testing:
+    description: "Test multi-country comparison functions with baseline-vs-others pattern"
+    test_categories:
+      - "gap_detection: Types present in others but not baseline"
+      - "attribute_diffs: Same type exists but with different attributes"
+      - "exclusion_filters: PIM types and structural types excluded from gaps"
+      - "aggregation: Multiple countries reporting same gap are grouped"
+      - "empty_result: No gaps when all countries match baseline"
+    fixture_design:
+      - "baseline: Record<string, number> (DK content type counts)"
+      - "others: Record<string, Record<string, number>> (country -> type -> count)"
+      - "Use small targeted fixtures (2-3 types per country) not full exports"
+    example_file: apps/migration/src/audit/country-schema-audit.test.ts
+
+  markdown_table_parsing_shell:
+    description: "Extract structured data from markdown tables using awk"
+    pattern:
+      - "Skip non-table lines with [[ line =~ ^\\| ]]"
+      - "Skip separator lines with [[ line =~ ^\\|[-[:space:]:]+\\|$ ]]"
+      - "Parse columns with awk -F'|' and gsub for whitespace trimming"
+    when: "Reading docs/expert-coverage-map.md or similar structured markdown"
+
+  prefix_match_domain_validation:
+    description: "Validate domain coverage using prefix matching between fine-grained discovered paths and coarse-grained map entries"
+    pattern:
+      - "Test discovers every file/dir at specified depth under canonical roots"
+      - "Coverage map groups areas at directory level"
+      - "Matching uses regex prefix: [[ $domain =~ ^${map_domain} ]]"
+    critical_gotcha: "Table cell text containing skip-words like 'Root' or 'Domain' will be silently filtered by the parser"
+
+  richtext_tree_search:
+    description: "Recursively find nodes by type in a Storyblok richtext document tree"
+    pattern: |
+      function findNodes(node: any, type: string): any[] {
+        const results: any[] = [];
+        if (node?.type === type) results.push(node);
+        if (Array.isArray(node?.content)) {
+          for (const child of node.content) results.push(...findNodes(child, type));
+        }
+        return results;
+      }
+    use_cases:
+      - Assert image nodes exist in richtext output
+      - Assert image src URLs contain resolved Storyblok URLs
+      - Assert no ezcontent:// references remain in resolved output
+
+  shared_xml_fixture_const:
+    description: "Define reference XML containing ezembed as a module-level constant for reuse across tests"
+    rules:
+      - Constant is defined once per test file, not shared across files
+      - Mapping function creates AssetResolver with known contentId that matches the XML
+      - Each test file is self-contained to avoid cross-file import dependencies
+
+  storyblok_422_testing:
+    description: "Test payload validity to prevent Storyblok 422 errors"
+    assertions:
+      - "Every nested blok has _uid (string, non-empty)"
+      - "Every nested blok has component (string, non-empty)"
+      - "Link fields are proper multilink objects or UUIDs, not bare numeric strings"
+      - "Null relation fields are omitted, not set to '0' or 'null'"
+    common_causes:
+      - "Missing _uid on inline bloks (ezpage parser not generating UUIDs)"
+      - "Bare numeric content IDs stored as strings in link/relation fields"
+      - "Null values serialized as string 'null' or '0'"
+
+  contentid_mapping_fixture:
+    description: "Build test fixtures for numeric-ID-to-remoteId resolution"
+    pattern: |
+      const items = [makeLinkItem({ remoteId: 'uuid-abc' })];
+      const contentIdMapping: Record<string, string> = { '38575': 'uuid-abc' };
+      const found = findItemByAnyId(items, 38575, contentIdMapping);
+      expect(found).toBeDefined();
+    rules:
+      - Items have UUID remoteIds (like real Ibexa exports)
+      - contentIdMapping maps string numeric IDs to those UUIDs
+      - Test both with and without contentIdMapping to verify backward compatibility
+    real_data_reference: "dk-contentid-mapping.json has 30800 entries mapping numeric -> UUID"
+
+  worktree_dep_verification:
+    description: "Verify dependencies in git worktree without full reinstall"
+    pattern: "Run 'bun install' and check output for 'no changes' vs actual install activity"
+    observation: "When node_modules exists from prior session, bun install completes in ~21ms with 'no changes'"
+    implication: "Worktree node_modules persist across agent sessions -- only first session needs full install"
+
+  mock_reader_pattern:
+    description: Create lightweight mock objects matching StoryblokReader interface for validator tests
+    pattern: |
+      function createMockReader(stories: StoryblokStory[]) {
+        return {
+          getAllStories: async () => stories,
+          getStoriesByComponent: async (component: string) => stories.filter(s => s.content.component === component),
+          getStoriesInFolder: async (folder: string) => stories.filter(s => s.full_slug.startsWith(folder)),
+          storyExists: (uuid: string) => stories.some(s => s.uuid === uuid),
+          getFolders: async () => [],
+        };
+      }
+    rules:
+      - Use plain objects, not class instances -- avoids dependency on production StoryblokReader
+      - Cast with 'as any' when passing to validator constructors
+      - Filter logic in mock matches what real reader would return
+      - Tests control the exact data the validator sees
+
+  bash_script_validation:
+    description: Validate shell scripts without execution
+    commands:
+      syntax_check: "bash -n path/to/script.sh"
+    critical_gotcha: "bash -n does NOT detect version compatibility issues -- local -A (associative arrays) is bash 4+ only"
+    macos_portability:
+      - "Avoid local -A (bash 4+ only) -- use flat while-read loops"
+      - "Avoid readarray/mapfile (bash 4+ only)"
+      - "Avoid ${var,,} lowercase (bash 4+ only) -- use tr or awk"
+    use_cases:
+      - Verify trap statements are syntactically correct
+      - Validate script after modifying control flow
+
+  markdown_parsing_tests:
+    description: Test structured document parsers with inline fixture strings
+    pattern:
+      - Define MINIMAL_PLAN, PLAN_WITH_CYCLE etc as module-level constants
+      - Test each parser function independently (parse_team_members, parse_tasks)
+      - Test validation errors with targeted bad fixtures (missing field, bad ref)
+      - Test against real files from specs/ for integration confidence
+      - Use pytest.raises(SystemExit) for CLI tools that call sys.exit()
+    example_file: adws/tests/test_parse_plan.py
+
+  api_shape_validation:
+    description: Validate HTTP endpoint responses against TypeScript interface contracts
+    pattern:
+      - Define required fields per interface (from types.d.ts)
+      - Hit each endpoint with stdlib urllib (no extra deps)
+      - Check all required fields present in response
+      - Validate nested objects recursively (e.g. Agent inside list_agents)
+      - Report missing fields with endpoint path context
+    example_file: apps/orchestrator_3_stream/backend/tmp_scripts/test_shapes.py
+
+  websocket_sequence_tests:
+    description: Test WebSocket message sequences triggered by HTTP actions
+    pattern:
+      - Connect WebSocket, consume connection_established
+      - Trigger action via HTTP POST (e.g. send_chat)
+      - Collect N expected WebSocket messages with timeout
+      - Assert message types arrive in exact expected order
+      - Validate individual message fields (sender_type, is_typing, is_complete)
+    critical_gotcha: "Use stdlib urllib.request for HTTP calls alongside websockets lib to avoid aiohttp dependency. Run HTTP in executor thread to avoid blocking asyncio loop."
+    example_file: apps/orchestrator_3_stream/backend/tmp_scripts/test_ws.py
+
+  retry_backoff_tests:
+    description: Test retry logic with mocked subprocess and time.sleep
+    pattern:
+      - Mock the invoke function with side_effect list (fail, fail, succeed)
+      - Mock time.sleep to avoid real waits
+      - Assert call counts match expected retry count
+      - Assert backoff schedule values passed to sleep
+      - Test timeout (subprocess.TimeoutExpired) triggers retry
+      - Test FileNotFoundError stops retries immediately
+    example_file: adws/tests/test_codex_review.py
+
+  scss_compilation_tests:
+    description: Test SCSS functions/mixins by compiling snippets and asserting on CSS output
+    pattern:
+      - Use sass.compileString() with loadPaths pointing to source directories
+      - Normalize whitespace for easier comparison
+      - Assert on CSS property names and clamp() structure with regex
+      - For math-heavy functions, manually compute expected output values before asserting
+    critical_gotcha: "When testing CSS clamp() fluid scaling, the vw coefficient is slope * 100 where slope = (max - min) / (max_vp - min_vp). Always hand-calculate expected numeric output before writing assertions."
+    setup: "Install sass as devDependency (npm install --save-dev sass)"
+    red_phase_failure: "Can't find stylesheet to import when SCSS module does not exist"
+    key_insight: "Unlike JS module tests, SCSS tests do NOT need stub files for RED phase -- sass.compileString throws immediately if the module is missing, and vitest still discovers all individual tests"
+    example_file: apps/frontend/src/styles/__tests__/fluid-clamp.test.ts
+
+  test_naming:
+    pattern: Natural language describing behavior
+    examples:
+      - "parses media YAML and extracts all image entries by contentType: image"
+      - "deduplicates images across countries by full URI"
+      - "does NOT deduplicate by filename alone"
+      - "retries once on network error (timeout, connection reset)"
+      - "merges with existing mapping on re-run (does not replace)"
+
+  fixture_based_testing:
+    description: Create minimal YAML/JSON fixtures for unit tests
+    location: "src/__fixtures__/"
+    rules:
+      - Mirror real data structure exactly (same field names, nesting)
+      - "Keep small: 3-4 representative entries per fixture"
+      - "Include edge cases: null values, missing fields, different content types"
+      - Use real field values from actual exports as templates
+      - Separate fixtures for different scenarios (overlap, content, media)
+
+  factory_helpers:
+    description: Use factory functions with Partial<T> overrides for test data
+    pattern: |
+      function makeImage(overrides: Partial<ImageEntry> = {}): ImageEntry {
+        return { ...defaults, ...overrides };
+      }
+    rules:
+      - Define sensible defaults for all required fields
+      - Tests only specify fields relevant to the behavior being tested
+      - Place helpers at top of test file, not in separate utils
+
+  orchestration_boundary:
+    description: CLI runners and orchestration layers are not unit tested
+    reason: They compose already-tested units with no new logic worth isolating
+    validation: "Integration testing via CLI flags (--dry-run, --report-only, etc)"
+    examples:
+      - "src/run.ts orchestrates parse->consolidate->download->upload->map"
+      - src/index.ts wraps commander CLI argument parsing
+    rule: "If the orchestration layer adds branching logic (quality gates, checksums), test the logic functions in isolation, not the orchestration flow"
+
+  optional_parameter_testing:
+    description: Test both with and without optional new parameters
+    pattern:
+      with_param: Verify new behavior when optional param is provided
+      without_param: Verify existing behavior is unchanged when param is omitted
+    example:
+      - transformItem accepts AssetResolver parameter and passes to transformers
+      - transformItem works without resolver (backward compatible)
+    rule: Backward-compatibility test should assert the SAME output as the existing test suite
+
+  route_handler_testing:
+    description: Test Next.js API route handlers by importing and calling directly
+    pattern: |
+      vi.mock('next/cache', () => ({ revalidateTag: vi.fn() }));
+      import { POST } from './route';
+      function createRequest(body, options) {
+        return new Request(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      }
+      const response = await POST(request);
+      const json = await response.json();
+    mocking:
+      - Mock next/cache before importing route handler
+      - Use vi.clearAllMocks() in beforeEach
+      - Set process.env values in beforeEach
+    assertions:
+      - Check response.status for HTTP status code
+      - Parse response.json() for body assertions
+      - Verify mock calls with toHaveBeenCalledWith
+
+  e2e_api_testing:
+    description: Use Playwright request API for testing API routes
+    pattern: |
+      test('returns 401 without secret', async ({ request }) => {
+        const response = await request.post('/api/revalidate', { data: {...} });
+        expect(response.status()).toBe(401);
+        const json = await response.json();
+      });
+    key_differences:
+      - "Use { request } fixture, not { page }"
+      - Use request.post/get instead of page.goto
+      - Status is response.status() (method call, not property)
+      - Body is response.json() (same as fetch)
+    when: Testing API routes that have no UI (webhooks, data endpoints)
+    note: "Next.js auto-returns 405 for unexported methods, so test GET returning 405 when only POST is exported"
+
+  storyblok_component_testing:
+    description: Standard mock and factory pattern for Storyblok block component tests
+    mock_setup: |
+      vi.mock('@storyblok/react/rsc', () => ({
+        storyblokEditable: () => ({ 'data-testid': 'storyblok-editable' }),
+        StoryblokServerComponent: ({ blok }: { blok: any }) => (
+          <div data-testid={blok.component}>{blok._uid}</div>
+        ),
+      }));
+    richtext_mock: |
+      vi.mock('storyblok-rich-text-react-renderer', () => ({
+        render: (doc: any) => <div data-testid='richtext'>{JSON.stringify(doc)}</div>,
+      }));
+    factory_pattern: |
+      const makeBlok = (overrides = {}) => ({
+        _uid: 'component-1', component: 'component_name',
+        anchor: 'section-id', title: 'Title', ...overrides,
+      });
+    standard_assertions:
+      - renders title text
+      - sets anchor id on root element (container.firstElementChild.id)
+      - applies storyblok editable (getByTestId storyblok-editable)
+      - renders child items via StoryblokServerComponent (getByText uid)
+      - handles empty/missing optional fields gracefully
+    exceptions:
+      spacer: "No anchor id, no storyblokEditable -- purely presentational"
+      form_embed: "Security test: assert no innerHTML/dangerouslySetInnerHTML"
+
+  radix_accordion_testing:
+    description: Keyboard navigation and expand/collapse testing for Radix Accordion
+    dependencies: "@testing-library/user-event, @radix-ui/react-accordion"
+    setup: "const user = userEvent.setup()"
+    expand_collapse:
+      click: "await user.click(trigger) -> getAllByRole('region') for expanded panels"
+      toggle: "Click same trigger twice -> queryAllByRole('region') length decreases"
+      independent: "type='multiple' -> clicking one does not close others"
+    keyboard_navigation:
+      enter_space: "trigger.focus() + user.keyboard('{Enter}') toggles panel"
+      arrow_down: "user.keyboard('{ArrowDown}') moves focus to next trigger"
+      arrow_up: "user.keyboard('{ArrowUp}') moves focus to previous trigger"
+      home: "user.keyboard('{Home}') moves focus to first trigger"
+      end: "user.keyboard('{End}') moves focus to last trigger"
+    assertions:
+      focus: "expect(triggers[n]).toHaveFocus()"
+      expanded: "screen.getAllByRole('region').length >= N"
+      collapsed: "screen.queryAllByRole('region').length === 0"
+
+  security_assertion_testing:
+    description: Assert component renders user input as text, not executable HTML
+    pattern:
+      - "Render with malicious input: <script>alert('xss')</script>"
+      - "Assert input appears as visible text: screen.getByText('<script>...')"
+      - "Assert no actual script element: container.querySelector('script') === null"
+      - "Assert no injected img element: container.querySelector('img') === null"
+    use_case: FormEmbed embedform field must never use dangerouslySetInnerHTML
+    key_insight: "If text appears as getByText but no DOM element of that tag exists, the component renders as textContent (safe) not innerHTML (unsafe)"
+
+  async_server_component_testing:
+    description: Test async RSC by awaiting the component function and rendering the JSX
+    pattern: |
+      vi.mock('@/lib/storyblok/fetchers', () => ({ getFooterContent: vi.fn() }));
+      import { Footer } from './Footer';
+      const jsx = await Footer({ country: 'dk' });
+      render(jsx);
+    key_insight: "Simple RSC (no streaming, no suspense boundaries) can be tested by mocking the data fetcher and awaiting the function call"
+    when: Server Component is a simple async function with no streaming, no suspense, no client-side interactivity
+    when_not: "Server Component uses streaming, React.Suspense, or needs real HTTP integration -- use Playwright instead"
+    mock_pattern: vi.mock the fetcher module, import component AFTER mock setup
+
+  temp_file_testing:
+    description: Test filesystem-dependent code with temp directories
+    pattern: |
+      let tmpDir: string;
+      beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-prefix-')); });
+      afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+      function writeFixture(name: string, content: string): string {
+        const p = path.join(tmpDir, name); fs.writeFileSync(p, content, 'utf-8'); return p;
+      }
+    use_cases:
+      - CSV parsing functions that read from disk
+      - File-based mapping builders
+      - Any function accepting a file path parameter
+    example_file: apps/migration/src/utils/contentid-mapper.test.ts
+
+  coverage_audit:
+    description: Map story acceptance criteria OR project domains to test cases / expert owners
+    steps:
+      - List all tests specified in the story (numbered)
+      - For each, find the matching test in codebase (file + line)
+      - Mark as PASS/FAIL/MISSING
+      - Identify asymmetries (e.g. happy-path tested for one function but not its counterpart)
+    output: Numbered table with story-test -> existing-test mapping and status
+    domain_mapping_variant:
+      steps:
+        - Inventory directories from canonical domain roots
+        - Read expertise.yaml scope and key_files for each expert
+        - Match directories to experts via path prefix matching
+        - Produce structured coverage map as markdown table
+      output: docs/expert-coverage-map.md
+
+  server_component_mock_pattern:
+    description: Mock fetcher modules for Server Component unit tests
+    pattern: |
+      const mockGetFooterContent = vi.fn<(country: string) => Promise<FooterContent>>();
+      vi.mock('@/lib/storyblok/fetchers', () => ({
+        getFooterContent: (...args: unknown[]) => mockGetFooterContent(...(args as [string])),
+      }));
+    rules:
+      - Type the mock function with generics for type safety
+      - Use wrapper function in vi.mock factory to forward args to the mock
+      - Use mockResolvedValueOnce per test for isolation
+      - Clear mocks in beforeEach
+
+  migration_fixture_from_real_data:
+    description: Build test fixtures from real export data structure
+    steps:
+      - Read actual YAML export to understand field names and nesting
+      - Create factory functions per content type (makeLinkItem, makeHeaderItem, etc.)
+      - Use real remoteIds and field names from the export
+      - Build composite fixtures (buildCmsOnlyFixture) matching real content distribution
+    rules:
+      - Field names must match exactly (e.g. 'slug_svg' not 'icon', 'pictoasset' not 'image')
+      - Nested structures must mirror real data (e.g. '{ destinationContentId: 36623 }')
+      - Include items for exclusion testing (PIM types, config types) in separate fixture
+
+  migration_pipeline_integration:
+    description: "Test full transform pipeline with in-memory fixtures (no YAML files, no API calls)"
+    pattern:
+      - "Build fixture items via factory functions (makeFolder, makePageContent)"
+      - "Compose into buildFixture() returning array of all items"
+      - "Use transformItem + buildLocationTree + getFolderPath as pipeline"
+      - "Use os.tmpdir + fs.mkdtempSync for Logger temp directory isolation"
+    test_categories:
+      - "Routing: each content type maps to correct component"
+      - "Folder hierarchy: buildLocationTree + getFolderPath produce correct paths"
+      - "External_id: set on all payloads, unique, matches remoteId"
+      - "Block parsing: ezpage body arrays present and non-empty"
+      - "Reference resolution: resolvers thread through full pipeline"
+      - "Idempotency: deterministic payloads, external_id enables update-vs-create"
+    example_file: apps/migration/src/transformer/dk-page-migration.test.ts
+
+  idempotency_testing:
+    description: "Test that migration re-runs produce update (not create) using external_id"
+    pattern:
+      - "First run: transform items, collect payloads with external_id"
+      - "Simulate existing stories in Map<external_id, {id, uuid}>"
+      - "Second run: lookup each payload.external_id in map, classify as update/create"
+      - "Assert all actions are 'update', zero 'create' (no duplicates)"
+    key_insight: "external_id is the idempotency key -- same input always produces same external_id"
+
+  mock_storyblok_api:
+    description: Create mock Storyblok Management API for migration tests
+    pattern: |
+      function createMockStoryblokApi() {
+        const stories = new Map();
+        let nextId = 1000;
+        return {
+          stories,
+          createStory: vi.fn(async (payload) => { ... }),
+          findByExternalId: vi.fn(async (extId) => { ... }),
+          updateStory: vi.fn(async (id, payload) => { ... }),
+        };
+      }
+    assertions:
+      - stories.size for duplicate detection (idempotency)
+      - story.uuid consistency across multiple runs
+      - createStory.mock.calls.length for create-vs-update counting
+
+  msw_bun_lifecycle:
+    description: MSW server lifecycle must be in each test file under bun:test
+    pattern: |
+      import { server } from './test-support/msw-server';
+      beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+      afterEach(() => server.resetHandlers());
+      afterAll(() => server.close());
+    msw_server_file: "src/test-support/msw-server.ts exports setupServer() with no default handlers"
+    why: "bun:test has no setupFiles equivalent; each test file manages its own lifecycle"
+    note: server.use() in beforeEach or individual tests for per-test handlers
+
+test_frameworks:
+  pytest:
+    version: "8.4.2"
+    python_version: "3.14"
+    commands:
+      run: "python3 -m pytest adws/tests/ -v"
+      single: "python3 -m pytest adws/tests/test_<name>.py -v"
+    conventions:
+      - sys.path.insert for package imports
+      - tmp_path fixture for temp directories
+      - Class-based grouping (TestClassName)
+      - unittest.mock for mocking (patch, MagicMock)
+
+  vitest:
+    config_file: vitest.config.ts
+    commands:
+      run: "npx vitest run"
+      coverage: "npx vitest --coverage"
+    codebase_patterns:
+      separate_dir:
+        include: "tests/**/*.test.ts"
+        example: apps/migration/vitest.config.ts
+      co_located:
+        include: "src/**/*.test.ts"
+        example: tools/media-migration/vitest.config.ts
+      frontend_app:
+        include: "src/**/*.test.{ts,tsx}"
+        environment: jsdom
+        setup: "./tests/support/setup.ts"
+        features: [MSW server, jest-dom matchers, CSS modules non-scoped]
+        example: apps/frontend/vitest.config.ts
+        note: "MSW runs with onUnhandledRequest error - route handler tests using vi.mock for next/cache do not conflict with MSW"
+    common_config:
+      globals: true
+      coverage_provider: v8
+      coverage_exclude: ["src/**/*.d.ts", "src/**/*.test.ts"]
+    esm_imports:
+      description: ESM requires .js extension on relative imports
+      example: "import { parseMediaYaml } from './parser.js'"
+      note: Source is parser.ts but import uses .js per NodeNext resolution
+      common_mistake: Using .ts extension causes vitest module resolution failure
+    globals_tsc_fix:
+      description: MANDATORY fix for co-located test files with globals:true
+      when: Test files (*.test.ts) are in src/ directory included by tsconfig
+      fix: "Add \"types\": [\"vitest/globals\"] to tsconfig.json compilerOptions"
+      why_mandatory: "tsc --noEmit is a validation gate; cannot pass with unfixed globals"
+      why_apps_migration_works: It excludes tests/ dir from tsconfig include
+      setup_phase_rule: Apply this fix during project setup, same time as vitest.config.ts
+    apps_migration_include:
+      patterns:
+        - "tests/**/*.test.ts"
+        - "src/**/*.test.ts"
+      note: Updated from single-pattern to dual-pattern to support co-located tests alongside existing tests/ directory
+
+  bun_test:
+    import: "import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'"
+    commands:
+      run: "bun test"
+      run_single: "bun test src/pim-client.test.ts"
+    config: "None needed -- bun discovers *.test.ts automatically"
+    msw_compatible: "true (msw/node works with Bun native fetch)"
+    key_difference_from_vitest: "No setupFiles -- MSW lifecycle (server.listen/resetHandlers/close) must be in each test file via beforeAll/afterAll/afterEach"
+
+coverage:
+  metrics:
+    - Line coverage
+    - Branch coverage
+    - Function coverage
+    - Statement coverage
+
+  thresholds:
+    minimum: 80
+    target: 90
+
+  commands:
+    vitest: "npx vitest --coverage"
+
+key_files:
+  python_tests: "adws/tests/"
+  python_test_init: "adws/tests/__init__.py"
+  subprocess_timeout_test: "adws/tests/test_subprocess_timeouts.py"
+  url_parsing_test: "adws/tests/test_url_parsing.py"
+  plan_parser_test: "adws/tests/test_parse_plan.py"
+  codex_review_test: "adws/tests/test_codex_review.py"
+  port_registry_test: "adws/tests/test_port_registry.py"
+  issue_tracker_test: "adws/tests/test_issue_tracker.py"
+  bmad_integration_test: "adws/tests/test_bmad_integration.py"
+  has_frontend_test: "adws/tests/test_has_frontend.py"
+  skill_eval_test: "adws/tests/test_skill_eval.py"
+  tdd_pipeline_test: "adws/tests/test_tdd_pipeline.py"
+  fluid_clamp_test: "apps/frontend/src/styles/__tests__/fluid-clamp.test.ts"
+  scss_function_test: "apps/frontend/src/styles/__tests__/fluid-clamp.test.ts"
+  migration_pipeline_tests: "554 total (23+ test files under apps/migration/; 541 pass + 13 new tests across stories 4-10 through 4-17)"
+  expert_coverage_test: "tests/expert-coverage.sh"
+  dk_leaf_migration_test: "apps/migration/src/transformer/dk-leaf-migration.test.ts"
+  leaf_transformer_test: "apps/migration/src/transformer/leaf-transformer.test.ts"
+  contentid_mapper_test: "apps/migration/src/utils/contentid-mapper.test.ts"
+  dk_page_migration_test: "apps/migration/src/transformer/dk-page-migration.test.ts (40 tests)"
+  reference_resolver_test: "apps/migration/src/transformer/reference-resolver.test.ts (14 tests)"
+  schema_blocks_test: "apps/migration/src/schemas/schema-blocks.test.ts"
+  schema_audit_test: "apps/migration/src/audit/country-schema-audit.test.ts (14 tests)"
+  frontend_fetchers_test: "apps/frontend/src/lib/storyblok/fetchers.test.ts (6 tests: 4 existing + 2 new)"
+  block_component_tests: "apps/frontend/src/components/blocks/ (15 files, 87 total tests)"
+  new_dev_dependency: "@testing-library/user-event (required for FaqBlock keyboard tests)"
+  vitest_configs:
+    - "apps/frontend/vitest.config.ts"
+    - "lib/pim/vitest.config.ts"
+    - "apps/migration/vitest.config.ts"
+    - "tools/media-migration/vitest.config.ts"
+
+output_format:
+  cycle_report:
+    - "phase: red | green | refactor"
+    - "test_file: path to test"
+    - "test_name: test description"
+    - "status: pass | fail"
+    - "implementation_file: path to code"

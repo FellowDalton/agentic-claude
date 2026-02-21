@@ -1,0 +1,305 @@
+# Overstory CLI Expert Knowledge
+# Multi-agent orchestration system for Claude Code
+# Source: https://github.com/jayminwest/overstory
+
+overview:
+  description: "Project-agnostic swarm system that transforms a single Claude Code session into a coordinated multi-agent team"
+  runtime: "Bun v1.0+ (zero runtime dependencies, uses Bun built-in APIs)"
+  repo: "https://github.com/jayminwest/overstory"
+  requirements:
+    - "Bun v1.0+"
+    - "Claude Code"
+    - "git"
+    - "tmux"
+  state_dir: ".overstory/"
+  hooks_dir: ".claude/settings.local.json"
+
+installation:
+  from_source:
+    - "git clone https://github.com/jayminwest/overstory.git"
+    - "cd overstory"
+    - "bun install"
+    - "bun link"
+  project_init:
+    - "cd your-project"
+    - "overstory init"
+    - "overstory hooks install"
+
+architecture:
+  hierarchy:
+    coordinator:
+      role: "Persistent orchestrator at project root"
+      purpose: "Decomposes objectives, dispatches agents"
+      commands: ["overstory coordinator start", "overstory coordinator stop", "overstory coordinator status"]
+    supervisor:
+      role: "Per-project team lead"
+      purpose: "Manages worker lifecycle"
+      commands: ["overstory supervisor start", "overstory supervisor stop", "overstory supervisor status"]
+    workers:
+      types:
+        scout: "Read-only research agent"
+        builder: "Implementation agent"
+        reviewer: "Validation agent"
+        merger: "Branch specialist"
+        lead: "Team coordination"
+        monitor: "Continuous health patrol"
+
+  isolation:
+    method: "Git worktrees — each agent gets its own worktree"
+    benefit: "Eliminates file conflicts between concurrent workers"
+    management: ["overstory worktree list", "overstory worktree clean"]
+
+  messaging:
+    backend: "SQLite with WAL mode for concurrent access"
+    message_types:
+      - "worker_done"
+      - "merge_ready"
+      - "dispatch"
+      - "escalation"
+      - "status"
+      - "question"
+      - "result"
+      - "error"
+    addressing:
+      individual: "--to <agent-name>"
+      broadcast_groups: ["@all", "@builders", "@scouts"]
+    priority_levels: ["low", "normal", "high", "urgent"]
+
+  health_monitoring:
+    tier_0: "Mechanical daemon — checks tmux/process liveness"
+    tier_1: "AI-assisted failure diagnosis"
+    tier_2: "Continuous fleet monitoring via monitor agent"
+
+  tool_enforcement: "PreToolUse hooks restrict file modifications for non-implementation agents and dangerous git operations"
+
+  merge_system:
+    queue: "FIFO SQLite-backed queue"
+    conflict_resolution: "Four-tier strategy"
+
+  agent_definitions: "Two-layer system — base .md files define HOW (workflow), per-task overlays define WHAT (task scope)"
+
+cli_commands:
+  agent_management:
+    init:
+      command: "overstory init"
+      purpose: "Initialize overstory in project, deploys agent definitions"
+    coordinator_start:
+      command: "overstory coordinator start"
+      flags: ["--attach / --no-attach", "--watchdog", "--monitor"]
+    coordinator_stop:
+      command: "overstory coordinator stop"
+    coordinator_status:
+      command: "overstory coordinator status"
+    supervisor_start:
+      command: "overstory supervisor start"
+      flags: ["--attach / --no-attach"]
+    supervisor_stop:
+      command: "overstory supervisor stop"
+    supervisor_status:
+      command: "overstory supervisor status"
+    sling:
+      command: "overstory sling <task-id>"
+      purpose: "Spawn worker agents"
+      flags:
+        - "--capability <builder|scout|reviewer|lead|merger|coordinator|supervisor|monitor>"
+        - "--name <name>"
+        - "--spec <path>"
+        - "--files <f1,f2,...>"
+        - "--parent <agent-name>"
+        - "--depth <n>"
+        - "--json"
+    agents_discover:
+      command: "overstory agents discover"
+      flags: ["--capability <type>", "--state <state>", "--parent <name>", "--json"]
+    prime:
+      command: "overstory prime"
+      flags: ["--agent <name>", "--compact"]
+
+  monitoring:
+    status:
+      command: "overstory status"
+      flags: ["--json", "--verbose", "--all"]
+    dashboard:
+      command: "overstory dashboard"
+      flags: ["--interval <ms>", "--all"]
+      purpose: "Live TUI with configurable refresh"
+    feed:
+      command: "overstory feed"
+      flags: ["--follow / -f", "--interval <ms>", "--agent <name>", "--run <id>", "--json"]
+    logs:
+      command: "overstory logs"
+      flags: ["--agent <name>", "--level <debug|info|warn|error>", "--since <ts>", "--until <ts>", "--follow", "--json"]
+    trace:
+      command: "overstory trace"
+      flags: ["--agent <name>", "--run <id>"]
+    replay:
+      command: "overstory replay"
+      flags: ["--run <id>", "--agent <name>", "--since <ts>", "--until <ts>", "--limit <n>", "--json"]
+    inspect:
+      command: "overstory inspect <agent>"
+      flags: ["--json", "--follow", "--interval <ms>", "--no-tmux", "--limit <n>"]
+
+  hooks:
+    install:
+      command: "overstory hooks install"
+      flags: ["--force"]
+    uninstall:
+      command: "overstory hooks uninstall"
+    status:
+      command: "overstory hooks status"
+
+  messaging:
+    mail_send:
+      command: "overstory mail send"
+      flags:
+        - "--to <agent> | @all | @builders | @scouts"
+        - "--subject <text>"
+        - "--body <text>"
+        - "--type <status|question|result|error>"
+        - "--priority <low|normal|high|urgent>"
+    mail_check:
+      command: "overstory mail check"
+      flags: ["--agent <name>", "--inject", "--debounce <ms>", "--json"]
+    mail_list:
+      command: "overstory mail list"
+      flags: ["--from <name>", "--to <name>", "--unread"]
+    mail_read:
+      command: "overstory mail read <id>"
+    mail_reply:
+      command: "overstory mail reply <id>"
+      flags: ["--body <text>"]
+    nudge:
+      command: "overstory nudge <agent> [message]"
+      flags: ["--from <name>", "--force", "--json"]
+    broadcast:
+      command: "overstory broadcast"
+
+  task_groups:
+    group_create:
+      command: "overstory group create <name>"
+    group_status:
+      command: "overstory group status <name>"
+    group_add:
+      command: "overstory group add <name> <issue-id>"
+    group_list:
+      command: "overstory group list"
+
+  merge_operations:
+    merge:
+      command: "overstory merge"
+      flags: ["--branch <name>", "--all", "--into <branch>", "--dry-run"]
+    worktree_list:
+      command: "overstory worktree list"
+    worktree_clean:
+      command: "overstory worktree clean"
+      flags: ["--completed", "--all", "--force"]
+
+  health:
+    watch:
+      command: "overstory watch"
+      flags: ["--interval <ms>", "--background"]
+    monitor_start:
+      command: "overstory monitor start"
+    monitor_stop:
+      command: "overstory monitor stop"
+    monitor_status:
+      command: "overstory monitor status"
+    doctor:
+      command: "overstory doctor"
+      purpose: "Nine-module health check suite"
+      flags: ["--json", "--category <name>"]
+
+  lifecycle:
+    log:
+      command: "overstory log <event>"
+    run_list:
+      command: "overstory run list"
+    run_show:
+      command: "overstory run show <id>"
+    run_complete:
+      command: "overstory run complete <id>"
+    clean:
+      command: "overstory clean"
+      flags: ["--completed", "--all", "--run <id>"]
+    spec_write:
+      command: "overstory spec write <bead-id>"
+      flags: ["--body <content>"]
+
+  analytics:
+    costs:
+      command: "overstory costs"
+      flags: ["--live", "--self", "--agent <name>", "--run <id>", "--by-capability", "--last <n>", "--json"]
+    metrics:
+      command: "overstory metrics"
+      flags: ["--last <n>", "--json"]
+    errors:
+      command: "overstory errors"
+      flags: ["--agent <name>", "--run <id>", "--since <ts>", "--until <ts>", "--limit <n>", "--json"]
+
+  shell:
+    completions:
+      command: "overstory completions <bash|zsh|fish>"
+
+  global_flags: ["--quiet / -q", "--completions <shell>"]
+
+codebase_structure:
+  root_configs:
+    - "package.json"
+    - "tsconfig.json"
+    - "biome.json"
+    - "CLAUDE.md"
+    - "STEELMAN.md"
+  directories:
+    ".overstory/": "Project state and configuration"
+    ".claude/": "Claude Code settings and hooks"
+    "agents/": "Base agent definition .md files"
+    "templates/": "Overlay and hook templates"
+    "scripts/": "Utility and build scripts"
+  src_modules:
+    "src/commands/": "29 subcommand modules"
+    "src/agents/": "Agent lifecycle management"
+    "src/worktree/": "Git worktree management"
+    "src/mail/": "SQLite messaging system"
+    "src/merge/": "Conflict resolution"
+    "src/watchdog/": "Health monitoring daemon"
+    "src/logging/": "Multi-format logging (NDJSON)"
+    "src/metrics/": "SQLite metrics collection"
+    "src/doctor/": "Nine-module health checks"
+    "src/events/": "Event handling system"
+    "src/sessions/": "Session management"
+    "src/beads/": "Core module"
+    "src/insights/": "Analytics module"
+    "src/config.ts": "Configuration"
+    "src/types.ts": "TypeScript type definitions"
+    "src/index.ts": "Entry point (VERSION constant)"
+
+common_workflows:
+  basic_sprint:
+    - "overstory init"
+    - "overstory hooks install"
+    - "overstory coordinator start --watchdog --monitor"
+    - "overstory sling <task> --capability builder --name impl-1"
+    - "overstory status"
+    - "overstory dashboard --interval 5000"
+  parallel_build:
+    - "overstory sling task-1 --capability builder --name builder-a"
+    - "overstory sling task-2 --capability builder --name builder-b"
+    - "overstory sling review-all --capability reviewer --name qa"
+    - "overstory status --all"
+  debugging:
+    - "overstory doctor"
+    - "overstory inspect <agent>"
+    - "overstory logs --agent <name> --level error --follow"
+    - "overstory errors --agent <name>"
+  cleanup:
+    - "overstory worktree clean --completed"
+    - "overstory clean --completed"
+    - "overstory coordinator stop"
+
+cautions:
+  - "Agent swarms are not a universal solution (see STEELMAN.md)"
+  - "Compounding error rates with multi-agent systems"
+  - "Cost amplification from parallel token usage"
+  - "Debugging complexity increases with agent count"
+  - "Merge conflicts are normal outcomes in concurrent work"
+  - "Token instrumentation reads Claude Code transcript JSONL files"

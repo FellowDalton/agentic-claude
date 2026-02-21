@@ -1,0 +1,25 @@
+# Example Domain Expertise
+version: "1.0"
+last_updated: "2026-02-21"
+
+overview:
+  description: "Replace with a description of your domain and its key patterns"
+
+technology_stack:
+  language: "e.g. TypeScript 5.x"
+  framework: "e.g. Next.js 16"
+  testing: "e.g. Vitest"
+
+patterns:
+  naming:
+    files: "e.g. kebab-case"
+    components: "e.g. PascalCase"
+    functions: "e.g. camelCase"
+  architecture:
+    pattern: "Describe the primary architecture pattern"
+    layers: ["e.g. presentation", "business logic", "data access"]
+
+key_files:
+  entry: "e.g. src/index.ts"
+  config: "e.g. config/"
+  tests: "e.g. tests/"

@@ -1,0 +1,315 @@
+# Frontend Development Expertise
+version: "1.2"
+last_updated: "2026-02-13"
+
+overview:
+  description: "Frontend patterns for two apps: (1) Next.js 16 main site with BEM CSS and Storyblok, (2) Vue 3 orchestrator frontend with Pinia and dark theme"
+  aggregates:
+    - css-flexbox-grid
+    - scss-best-practices
+    - next-best-practices
+    - next-cache-components
+    - nextjs-app-router-patterns
+
+technology_stack:
+  nextjs: "16"
+  typescript: "5.x (strict mode)"
+  storyblok_react: "5.x"
+  radix_ui: "latest"
+  css: "CSS Modules with BEM"
+
+css_patterns:
+  bem_methodology:
+    block: "lowercase-hyphen (.product-card)"
+    element: "double underscore (.product-card__title)"
+    modifier: "double hyphen (.product-card--featured)"
+    examples:
+      block: ".product-card { }"
+      element: ".product-card__title { }, .product-card__image { }"
+      modifier: ".product-card--featured { }, .product-card--out-of-stock { }"
+
+  flexbox:
+    container: "display: flex"
+    direction: "flex-direction: row | column"
+    justify: "justify-content: flex-start | center | space-between | space-around"
+    align: "align-items: stretch | center | flex-start | flex-end"
+    wrap: "flex-wrap: nowrap | wrap"
+    gap: "gap: var(--spacing-md)"
+
+  grid:
+    container: "display: grid"
+    columns: "grid-template-columns: repeat(auto-fit, minmax(300px, 1fr))"
+    rows: "grid-template-rows: auto"
+    gap: "gap: var(--spacing-lg)"
+    areas: "grid-template-areas for complex layouts"
+
+  scss_best_practices:
+    nesting: "Max 3 levels deep"
+    variables: "Use CSS custom properties over SCSS variables for runtime theming"
+    mixins: "For reusable patterns like breakpoints"
+    no_tailwind: "NEVER use Tailwind CSS - BEM methodology only"
+
+  scss_module_system:
+    import: "@use not @import (Dart Sass module system)"
+    math: "sass:math for math.div()"
+    meta: "sass:meta for meta.type-of()"
+    strip_unit: "math.div($value, $value * 0 + 1)"
+
+  design_tokens:
+    file: "src/styles/variables.css"
+    pattern: "All tokens in :root {} as CSS custom properties"
+    categories:
+      - "colors (Exhausto palette)"
+      - "typography (font families, sizes, weights)"
+      - "spacing (--spacer, --grid-gutter)"
+      - "shadows, z-index, transitions"
+      - "header dimensions, button tokens"
+
+  fluid_clamp:
+    file: "src/styles/mixins/fluid-clamp.scss"
+    usage: "@use '../styles/mixins/fluid-clamp' as fluid;"
+    function: "fluid-clamp($min, $max, $min-vp: 736px, $max-vp: 1920px)"
+    output: "clamp(min-rem, intercept-rem + slope-vw, max-rem)"
+    dart_sass: "Uses @use sass:math and @use sass:meta"
+    mixins: [fluid-font-size, fluid-line-height, fluid-padding, fluid-margin, fluid-gap, fluid-width, fluid-height]
+
+  font_system:
+    family: "FrutigerLTStd, Helvetica, Arial, sans-serif"
+    weights: { 300: Light, 400: Roman, 700: Bold, 900: Black }
+    path: "/fonts/FrutigerLTStd-{variant}.woff2"
+    font_display: swap
+    declarations_file: "src/styles/typography.css"
+
+  globals_import_order:
+    file: "src/app/globals.css"
+    imports:
+      - "@import variables.css (tokens first)"
+      - "@import reset.css (clean baseline)"
+      - "@import typography.css (font-face + base styles)"
+
+  css_modules_bem:
+    access: "styles['block__element'] — bracket notation for BEM names"
+    class_joining: "Array filter pattern: [styles['header'], isSticky ? styles['header--sticky'] : ''].filter(Boolean).join(' ')"
+    config: "classNameStrategy: non-scoped in vitest.config.ts"
+
+nextjs_patterns:
+  ppr:
+    directive: "'use cache'"
+    cache_tag: "import { cacheTag } from 'next/cache'"
+    config: "cacheComponents: true in next.config"
+    example: |
+      'use cache';
+      import { cacheTag } from 'next/cache';
+
+      export async function getStory(slug: string, country: string) {
+        cacheTag(`story:${country}:${slug}`);
+        cacheTag(`country:${country}`);
+        const response = await storyblokApi.get(`cdn/stories/${country}/${slug}`);
+        return response.data.story;
+      }
+
+  app_router:
+    structure: "src/app/[country]/[...slug]/page.tsx"
+    layouts: "Layout components wrap pages, inherit caching"
+    loading: "loading.tsx for Suspense boundaries"
+    error: "error.tsx for error boundaries"
+    not_found: "not-found.tsx for 404 handling"
+    country_layout: "src/app/[country]/layout.tsx"
+
+  webhook_revalidation:
+    route: "src/app/api/revalidate/route.ts"
+    types: "StoryblokWebhookPayload, RevalidateResponse, ParsedSlug"
+    helper: "parseStoryblokSlug(fullSlug) -> { country, slug, tags }"
+    pattern: "satisfies operator on Response.json for compile-time type checking"
+    tags: ["story:{country}:{slug}", "country:{country}"]
+
+  server_client_boundary:
+    pattern: "Header.tsx (Server) fetches + transforms -> HeaderClient.tsx (Client) renders with hooks"
+    rule: "Data fetching ONLY in Server Components; interactive state ONLY in Client Components"
+    example_files:
+      - "src/components/layout/Header/Header.tsx (Server: fetches getNavigation)"
+      - "src/components/layout/Header/HeaderClient.tsx (Client: useStickyHeader)"
+      - "src/components/layout/Footer/Footer.tsx (Server: fetches getFooterContent)"
+
+storyblok_patterns:
+  data_transformation:
+    rule: "Never pass raw blok to child components"
+    pattern: "const product: Product = transformStoryblokProduct(blok)"
+    good_example: |
+      const product: Product = transformStoryblokProduct(blok);
+      <ProductDetails product={product} />
+    bad_example: |
+      <ProductDetails blok={blok} />  // Untyped, avoid!
+
+  component_mapping:
+    convention: "snake_case block IDs -> PascalCase React components"
+    count: "39 Storyblok components mapped"
+    registry: "Register in Storyblok component registry"
+
+  child_only_component:
+    note: "Some components are registered in storyblok.ts but NOT in BlockResolver"
+    reason: "Child-only bloks are rendered by their parent; top-level resolution not needed"
+    example: "Bloks that appear only nested inside another blok's field"
+
+  dompurify_sanitization:
+    package: "isomorphic-dompurify"
+    directive: "'use client' required (runs only in browser)"
+    data_uri_hook: |
+      DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+        if (node.tagName === 'A') node.setAttribute('target', '_blank');
+      });
+    usage: "Sanitize rich text HTML before dangerouslySetInnerHTML"
+
+  fetcher_module:
+    path: "src/lib/storyblok/fetchers.ts"
+    directive: "'use cache'"
+    pattern: "getStoryWithFallback() -> null check -> transform or FALLBACK constant"
+    cache_tags: [navigation, footer, "country:{country}"]
+    fallback: "FALLBACK_HEADER and FALLBACK_FOOTER constants"
+
+  storyblok_type_mapping:
+    text: string
+    richtext: "ISbRichtext"
+    asset: "{ filename: string; alt: string }"
+    multiasset: "Array<{ filename: string; alt: string; id: string }>"
+    number: number
+    boolean: boolean
+    bloks: "SpecificBlokType[]"
+    option: "string (selected value)"
+
+  type_definition_conventions:
+    file: "src/types/storyblok.d.ts"
+    extends: "All blok interfaces extend SbBlokData"
+    child_bloks: "Also extend SbBlokData"
+    sections: "Group by story with // --- separator comments"
+    schema_source: ".storyblok/components/*/components.json"
+
+component_structure:
+  required_files:
+    - "ComponentName.tsx"
+    - "ComponentName.module.css"
+    - "ComponentName.test.tsx"
+    - "index.ts"
+  example_layout: |
+    ComponentName/
+    ├── ComponentName.tsx        # Component implementation
+    ├── ComponentName.module.css # BEM-named styles
+    ├── ComponentName.test.tsx   # Co-located tests
+    └── index.ts                 # Barrel export
+
+  link_wrapping_pattern:
+    pattern: "Root element switches between <a> and <div> based on whether a link is present"
+    example: "ServiceBanner: renders <a href={link}> when link is set, <div> otherwise"
+    rationale: "Avoids wrapping an anchor around non-interactive content; keeps semantics clean"
+    implementation: |
+      const Tag = blok.link?.url ? 'a' : 'div';
+      const linkProps = blok.link?.url ? { href: blok.link.url } : {};
+      return <Tag {...linkProps} className={styles['service-banner']}>...</Tag>;
+
+testing_patterns:
+  radix_ui_jsdom:
+    resize_observer: "Must stub global.ResizeObserver as a class"
+    intersection_observer: "Must stub global.IntersectionObserver as a class (not vi.fn())"
+    keyboard_testing: "Use fireEvent.click for Radix state changes, not keyDown"
+
+  vitest_imports:
+    rule: "Import vi from vitest when using vi.mock/vi.fn/vi.spyOn"
+    minimal_rule: "Only import vitest utilities actually used"
+    lint: "@typescript-eslint/no-unused-vars catches unused imports"
+
+accessibility:
+  radix_ui:
+    purpose: "Unstyled accessible primitives"
+    components:
+      - "Accordion"
+      - "Dialog"
+      - "DropdownMenu"
+      - "NavigationMenu"
+      - "Tabs"
+      - "Tooltip"
+  requirements:
+    - "Proper ARIA attributes"
+    - "Keyboard navigation"
+    - "Focus management"
+
+# ═══════════════════════════════════════════════════════════
+# ORCHESTRATOR FRONTEND (Vue 3 + Pinia + Vite)
+# Path: apps/orchestrator_3_stream/frontend/
+# ═══════════════════════════════════════════════════════════
+
+orchestrator_frontend:
+  technology_stack:
+    vue: "3 (Composition API, <script setup lang='ts'>)"
+    pinia: "state management"
+    vite: "build tool"
+    typescript: "5.x"
+    axios: "HTTP client"
+    css: "Scoped CSS with CSS custom properties (no BEM, no Tailwind)"
+
+  service_layer:
+    pattern: "Import apiClient from ./api, export named async functions"
+    api_client: "Axios instance at src/services/api.ts (baseURL from VITE_API_BASE_URL)"
+    convention: "Return response.data directly or typed subset"
+    files:
+      - "src/services/api.ts (shared axios instance)"
+      - "src/services/chatService.ts (HTTP + WebSocket chat)"
+      - "src/services/agentService.ts (agent CRUD)"
+      - "src/services/eventService.ts (event history)"
+      - "src/services/worktreeService.ts (worktree list/switch)"
+      - "src/services/autocompleteService.ts (autocomplete)"
+
+  pinia_store:
+    style: "Composition API (defineStore('name', () => { ... }))"
+    state: "ref() declarations"
+    getters: "computed() functions"
+    actions: "Regular async function / function declarations"
+    return: "Explicit object listing all state/getters/actions"
+    file: "src/stores/orchestratorStore.ts"
+
+  component_conventions:
+    script: "<script setup lang='ts'> (Composition API)"
+    styles: "<style scoped> using CSS custom properties from global.css"
+    structure: "Single-file .vue components in src/components/"
+
+  dark_theme:
+    file: "src/styles/global.css"
+    bg: "--bg-primary:#0a0a0a, --bg-secondary:#1a1a1a, --bg-tertiary:#2a2a2a"
+    accent: "--accent-primary:#06b6d4 (cyan), --accent-secondary:#14b8a6 (teal)"
+    text: "--text-primary:#fff, --text-secondary:#b0b0b0, --text-muted:#6b7280"
+    border: "--border-color:#333, --border-light:#404040"
+    font_mono: "--font-mono: JetBrains Mono, Fira Code"
+
+  layout:
+    app_vue: "3-column grid (AgentList | EventStream | OrchestratorChat)"
+    header: "AppHeader.vue with stats pills, worktree switcher, action buttons"
+    websocket: "Real-time updates via ws://host:port/ws"
+
+key_files:
+  # Main site (Next.js)
+  components: "src/components/storyblok/"
+  ui: "src/components/ui/"
+  app: "src/app/"
+  lib: "src/lib/"
+  styles_dir: "src/styles/"
+  styles_variables: "src/styles/variables.css"
+  styles_reset: "src/styles/reset.css"
+  styles_typography: "src/styles/typography.css"
+  styles_fluid: "src/styles/fluid.scss"
+  styles_mixins: "src/styles/mixins/fluid-clamp.scss"
+  fonts: "public/fonts/ (4x FrutigerLTStd .woff2 files)"
+  layout_components: "src/components/layout/ (Header, Navigation, MobileMenu, Footer, Breadcrumb)"
+  ui_components: "src/components/ui/ (SearchForm)"
+  hooks: "src/hooks/ (useStickyHeader)"
+  fetchers: "src/lib/storyblok/fetchers.ts"
+  country_layout: "src/app/[country]/layout.tsx"
+  blocks_components: "src/components/blocks/ (Story 2.4 editorial + Story 2.5 medium-frequency + Story 2.6 low-frequency editorial blocks)"
+  # Orchestrator frontend (Vue 3)
+  orchestrator_root: "apps/orchestrator_3_stream/frontend/src/"
+  orchestrator_store: "apps/orchestrator_3_stream/frontend/src/stores/orchestratorStore.ts"
+  orchestrator_types: "apps/orchestrator_3_stream/frontend/src/types.d.ts"
+  orchestrator_services: "apps/orchestrator_3_stream/frontend/src/services/"
+  orchestrator_components: "apps/orchestrator_3_stream/frontend/src/components/"
+
+validation_hooks:
+  eslint: ".claude/hooks/validators/eslint_validator.py"
+  stylelint: ".claude/hooks/validators/stylelint_validator.py"

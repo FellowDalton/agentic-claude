@@ -1,0 +1,315 @@
+# Pim Sync Expertise
+# PIM sync service — nextPage API client, Storyblok content management, loader/mapper architecture, product data synchronization, and cron scheduling
+# Last validated: 2026-02-16
+
+domain: pim-sync
+purpose: PIM sync service — nextPage API client, Storyblok content management, loader/mapper architecture, product data synchronization, and cron scheduling
+
+scope:
+  - Sync service entry point and mode detection (initial-load vs document/software sync)
+  - Loader architecture (category, product, range, image, document, software loaders)
+  - Mapper architecture (category, product, range mappers with field transformers)
+  - PIM client (OAuth2 auth, DescendantsAndLinks, ElementsAndLinks, DicoCarac)
+  - Storyblok Management API client (CRUD stories, folders, assets, upsert by external_id)
+  - Load orchestrator with quality gates and phased execution
+  - Document/software sync pipeline with product linking
+  - Field map constants and PIM-to-Storyblok cross-reference
+  - Configuration and environment variable management (13 required env vars)
+  - Railway cron deployment (Bun runtime, no build step)
+  - Denmark (dk) pilot country patterns
+  - NOTE: PIM API protocol details are in the nextpage expert — this expert covers the sync service architecture
+
+# ==========================================================================
+# Architecture
+# ==========================================================================
+
+architecture:
+  overview:
+    description: "Bun-based cron service that syncs product data from Nextpage PIM to Storyblok"
+    runtime: "Bun (runs .ts directly, no build step)"
+    deployment: "Railway cron service — no web endpoints, no health check"
+    start_command: "bun run src/index.ts"
+    entry_point: apps/pim-sync/src/index.ts
+
+  modes:
+    initial_load:
+      trigger: "--initial-load CLI flag or SYNC_MODE=initial-load env var"
+      pipeline: "Bootstrap folders -> Categories -> Products -> Ranges -> Images"
+      quality_gates: "Each phase checked against threshold (90% categories/products/ranges, 80% images)"
+      abort_behavior: "Quality gate failure aborts remaining phases"
+    document_software_sync:
+      trigger: "Default mode (no flag)"
+      pipeline: "Precondition check -> Fetch PIM hierarchy -> Documents -> Software -> Product linking"
+      precondition: "At least 1 product story must exist in {country}/products/"
+
+  exit_codes:
+    0: "Sync completed (partial failures still exit 0, check summary)"
+    1: "Configuration error (missing/invalid env vars)"
+    2: "Precondition failure or fatal runtime error"
+
+# ==========================================================================
+# Core Patterns
+# ==========================================================================
+
+core_patterns:
+  loader_pattern:
+    description: "Each loader follows the same structure: fetch from PIM, map to Storyblok schema, upsert"
+    loaders:
+      category_loader: { file: "apps/pim-sync/src/loader/category-loader.ts", function: "loadCategories", entity_type: 101 }
+      product_loader: { file: "apps/pim-sync/src/loader/product-loader.ts", function: "loadProducts", entity_type: 102 }
+      range_loader: { file: "apps/pim-sync/src/loader/range-loader.ts", function: "loadRanges", entity_type: 103 }
+      image_loader: { file: "apps/pim-sync/src/loader/image-loader.ts", function: "loadImages" }
+      document_loader: { file: "apps/pim-sync/src/loader/document-loader.ts", functions: [fetchDocumentElements, downloadDocument, uploadDocumentToStoryblok, syncDocuments] }
+      software_loader: { file: "apps/pim-sync/src/loader/software-loader.ts", functions: [fetchSoftwareElements, downloadSoftware, uploadSoftwareToStoryblok, syncSoftware] }
+    output_type: "LoadPhaseResult { phase, created, updated, skipped, failed, total, inputCount, errors[], anomalies[], durationMs }"
+
+  mapper_pattern:
+    description: "Each mapper takes a PimElement and produces a typed Storyblok content object"
+    mappers:
+      category_mapper: { file: "apps/pim-sync/src/mapper/category-mapper.ts", function: "mapPimCategory", output: "CategoryContent" }
+      product_mapper: { file: "apps/pim-sync/src/mapper/product-mapper.ts", function: "mapPimProduct", output: "MappedProductContent" }
+      range_mapper: { file: "apps/pim-sync/src/mapper/range-mapper.ts", function: "mapPimRange", output: "RangeContent" }
+    shared_transformers: apps/pim-sync/src/mapper/transformers.ts
+
+  value_type_transformers:
+    description: "Pure functions that extract typed values from PimValue discriminated union"
+    file: apps/pim-sync/src/mapper/transformers.ts
+    functions:
+      extractStandardValue: "TypeValue=0 -> .Value string or null"
+      extractMultivaloLabels: "TypeValue=2 -> Values[].Label string[] or null"
+      extractLinkExtIds: "TypeValue=1 -> LinkedElements[].ElementExtID string[] or null"
+      parseReferenceList: "Parse 'CODE || LABEL\\r' format into ParsedReference[]"
+    null_safety: "All functions return null for undefined/null/wrong-TypeValue input, never throw"
+
+  field_map_constants:
+    description: "Machine-readable mapping from PIM DicoCaracExtID to Storyblok fields"
+    file: apps/pim-sync/src/mapper/field-map.ts
+    constants:
+      ELEMENT_TYPE_MAP: "{ 101: pim_category, 102: pim_product, 103: pim_product_range }"
+      TYPE_VALUE: "{ STANDARD: 0, LINK: 1, MULTIVALO: 2, SYSTEM_STATUS: 101, SYSTEM_LAST_MODIFIED: 104 }"
+      FIELD_MAP: "Nested by entity type (category, product, productRange) and source type (gestionText, gestionUrl, etc.)"
+      COMPUTED_FIELDS: "10 Ibexa fields not sourced from PIM API"
+      IBEXA_TO_PIM_CROSS_REFERENCE: "29 Ibexa fields mapped to PIM API keys"
+
+  quality_gate:
+    description: "Success rate check per load phase — abort pipeline if threshold not met"
+    file: apps/pim-sync/src/loader/index.ts
+    function: checkQualityGate
+    formula: "successRate = (created + updated + skipped) / inputCount"
+    thresholds: { categories: 0.9, products: 0.9, ranges: 0.9, images: 0.8 }
+
+  load_orchestrator:
+    description: "Sequences full initial load pipeline with quality gates between phases"
+    file: apps/pim-sync/src/loader/load-orchestrator.ts
+    function: runInitialLoad
+    phases: ["bootstrap folders", "categories", "products", "ranges", "images"]
+    error_handling: "Never throws — all errors captured in LoadSummaryReport"
+    category_cache: "Product loader receives categoryCache from category phase for parent lookups"
+
+  document_software_pipeline:
+    description: "Three-phase pipeline for syncing documents and software to product stories"
+    file: apps/pim-sync/src/index.ts
+    function: runSyncPipeline
+    phases:
+      1_documents: "syncDocuments -> DocumentMap (Map of ExtID to Storyblok asset ref)"
+      2_software: "syncSoftware -> SoftwareMap (Map of ExtID to Storyblok asset ref)"
+      3_linking: "linkDocumentsToProducts -> update product stories with document/software asset refs"
+    product_filter: "filterProductElements — identifies products by DC_P_NOMPRODUIT field or DC_DOCUMENTATION/DC_P_LOGICIELS link values"
+
+  folder_bootstrap:
+    description: "Create country-scoped folder structure in Storyblok before loading content"
+    file: apps/pim-sync/src/loader/bootstrap-folders.ts
+    function: bootstrapCountryFolders
+    folders: ["{country}", "{country}/categories", "{country}/products", "{country}/ranges"]
+
+  product_linker:
+    description: "Links document and software assets to product stories after sync"
+    file: apps/pim-sync/src/loader/product-linker.ts
+    function: linkDocumentsToProducts
+    consumes: [DocumentMap, SoftwareMap]
+    output: "LinkSyncReport { productsProcessed, productsWithDocs, productsWithSoftware, linkFailures }"
+
+# ==========================================================================
+# Clients
+# ==========================================================================
+
+clients:
+  pim_client:
+    description: "Nextpage PIM API client — OAuth2 auth, 3 endpoints"
+    file: apps/pim-sync/src/pim-client.ts
+    class: NextpagePimClient
+    note: "Ported from apps/frontend/src/lib/pim/client.ts (Story 5.1)"
+    auth: "OAuth2 Resource Owner Password Grant, token cached with 60s buffer"
+    endpoints:
+      getDescendantsAndLinks: "POST /api/sdk/element/DescendantsAndLinks (900s timeout)"
+      getElementsAndLinks: "POST /api/sdk/element/ElementsAndLinks (300s timeout)"
+      getDicoCarac: "GET /api/sdk/dicocarac/GetAll/{langId}"
+    retry: "401 -> re-auth once + retry; network error -> retry once; 5xx -> return error"
+    return_type: "PimResult<T> discriminated union"
+
+  storyblok_client:
+    description: "Storyblok Management API client — native fetch, rate limited"
+    file: apps/pim-sync/src/storyblok-client.ts
+    class: StoryblokManagementClient
+    base_url: "https://mapi.storyblok.com"
+    auth: "Authorization: {token} header (Management API personal access token)"
+    rate_limiting: "340ms delay between consecutive requests (~3 req/sec)"
+    methods:
+      createStory: "POST /v1/spaces/:id/stories/"
+      updateStory: "PUT /v1/spaces/:id/stories/:storyId"
+      getStory: "GET /v1/spaces/:id/stories/:storyId"
+      getStoriesByFolder: "GET with starts_with query, handles pagination (100/page)"
+      upsertByExternalId: "Find by external_id, update if exists, create if not"
+      createFolder: "Create folder story (is_folder: true)"
+      ensureFolder: "Idempotent folder creation (find by slug first)"
+      signAsset: "POST to get signed S3 upload URL"
+      uploadAssetToS3: "Upload file buffer to signed S3 URL via FormData"
+      uploadAsset: "Two-step flow: register + S3 upload"
+      searchAssets: "GET with search query"
+      getAssetByFilename: "Search + exact filename filter"
+    return_type: "StoryblokResult<T> discriminated union"
+
+# ==========================================================================
+# Types
+# ==========================================================================
+
+types:
+  pim_types:
+    file: apps/pim-sync/src/pim-types.ts
+    key_types:
+      PimElement: "{ ID, ExtID, ElementType, ParentExtID, Ordre, Label, Values: Record<string, PimValue> }"
+      PimValue: "Discriminated union by TypeValue: 0=Standard, 1=Link, 2=Multivalo, 101=SystemStatus, 104=LastModified"
+      PimResult: "{ success: true, data: T } | { success: false, error: PimError }"
+      PimConfig: "{ baseUrl, context, username, password, contextId, langId }"
+      PimElementType: "Enum: CATEGORY=7, PRODUCT=8, PRODUCT_RANGE=9, DOCUMENT=6, SOFTWARE=5"
+  mapper_types:
+    file: apps/pim-sync/src/mapper/types.ts
+    key_types: [StoryblokProductContent, StoryblokCategoryContent, ParsedReference, StoryblokAssetRef, DocumentMap, SoftwareMap]
+  loader_types:
+    file: apps/pim-sync/src/loader/types.ts
+    key_types: [DocumentAssetRef, SoftwareAssetRef, DocumentSyncReport, SoftwareSyncReport, LinkSyncReport, SyncReport]
+
+# ==========================================================================
+# Configuration
+# ==========================================================================
+
+configuration:
+  file: apps/pim-sync/src/config.ts
+  function: loadSyncConfig
+  required_env_vars_count: 13
+  groups:
+    pim_api: [PIM_BASE_URL, PIM_USERNAME, PIM_PASSWORD, PIM_CONTEXT, PIM_CONTEXT_ID, PIM_LANG_ID]
+    storyblok_api: [STORYBLOK_MANAGEMENT_TOKEN, STORYBLOK_SPACE_ID]
+    sync_config: [SYNC_COUNTRIES, SYNC_DRY_RUN, SYNC_BATCH_SIZE, SYNC_LOG_LEVEL, PIM_ROOT_EXTID]
+  validation: "Throws listing ALL missing vars (not just first) so operators can fix in one pass"
+  country_map:
+    dk: { context: "/dk", contextId: 27, langId: 26, rootExtId: "##b348bbf6-cc8f-4419-9e2c-02a0472952bf" }
+    se: { context: "/se", contextId: 29, langId: 25, rootExtId: "##placeholder-se" }
+    no: { context: "/no", contextId: 30, langId: 24, rootExtId: "##placeholder-no" }
+    de: { context: "/de", contextId: 26, langId: 12, rootExtId: "##placeholder-de" }
+    en: { context: "/en", contextId: 33, langId: 2, rootExtId: "##placeholder-en" }
+  return_type: "SyncConfig { pim, storyblok, countries[], dryRun, batchSize, logLevel, pimRootExtId }"
+
+# ==========================================================================
+# Best Practices
+# ==========================================================================
+
+best_practices:
+  - "Always validate config with loadSyncConfig() before starting sync — lists ALL missing vars at once"
+  - "Use quality gates between load phases to abort early on systematic failures"
+  - "Use upsertByExternalId for idempotent story creation — avoids duplicates on re-runs"
+  - "Rate-limit Storyblok Management API at 340ms between requests (~3 req/sec)"
+  - "Set rateLimitMs to 0 in tests to disable rate limiting"
+  - "Use PimResult/StoryblokResult discriminated unions — never throw from API methods"
+  - "Thread categoryCache from category loader to product loader for parent lookups"
+  - "Cache PIM auth token with 60-second expiry buffer (proactive renewal)"
+  - "Use import.meta.main guard so index.ts can be imported by tests without auto-executing"
+  - "Run documents before software before product linking — strict dependency order"
+  - "Use dry-run mode (SYNC_DRY_RUN=true) to verify mappings before live sync"
+
+# ==========================================================================
+# Common Pitfalls
+# ==========================================================================
+
+common_pitfalls:
+  - "PIM auth endpoint requires application/x-www-form-urlencoded, NOT JSON — JSON causes silent auth failure"
+  - "ResultsExtIDs in PIM responses contains numeric IDs, NOT ExtIDs (misleading name)"
+  - "OnlyOneLevel='false' on large hierarchies can cause 15-minute timeouts on DescendantsAndLinks"
+  - "Parent elements are auto-included in DescendantsAndLinks responses (one level up from requested root)"
+  - "SE/NO/DE/EN root ExtIDs are still placeholders — only DK (##b348bbf6...) is confirmed"
+  - "Storyblok asset search is fuzzy — must filter for exact filename match after search"
+  - "S3 upload returns 204 No Content on success, not 200 — check for both"
+  - "Product elements identified by DC_P_NOMPRODUIT field presence, not ElementType alone"
+  - "Document and software elements share ElementType=2 with products — discriminate by field presence"
+  - "MSW lifecycle (server.listen/resetHandlers/close) must be in each test file for bun:test (no setupFiles)"
+
+# ==========================================================================
+# Complementary to nextpage Expert
+# ==========================================================================
+
+nextpage_complement:
+  description: "This expert covers the sync SERVICE architecture. The nextpage expert covers the PIM API CLIENT protocol details."
+  nextpage_covers: "PIM API endpoints, auth protocol, value types, field mapping validation, PimResult types"
+  pim_sync_covers: "Sync service orchestration, loader/mapper patterns, Storyblok client, quality gates, cron deployment, document/software pipeline"
+
+# ==========================================================================
+# Testing
+# ==========================================================================
+
+testing:
+  framework: "bun:test"
+  run_command: "cd apps/pim-sync && bun test"
+  msw_pattern: "MSW server in each test file (no setupFiles in bun:test)"
+  msw_server: apps/pim-sync/src/test-support/msw-server.ts
+  key_test_files:
+    - apps/pim-sync/src/config.test.ts
+    - apps/pim-sync/src/index.test.ts
+    - apps/pim-sync/src/pim-client.test.ts
+    - apps/pim-sync/src/storyblok-client.test.ts
+    - apps/pim-sync/src/loader/category-loader.test.ts
+    - apps/pim-sync/src/loader/document-loader.test.ts
+    - apps/pim-sync/src/loader/image-loader.test.ts
+    - apps/pim-sync/src/loader/index.test.ts
+    - apps/pim-sync/src/loader/load-orchestrator.test.ts
+    - apps/pim-sync/src/loader/product-linker.test.ts
+    - apps/pim-sync/src/loader/product-loader.test.ts
+    - apps/pim-sync/src/loader/range-loader.test.ts
+    - apps/pim-sync/src/loader/software-loader.test.ts
+    - apps/pim-sync/src/mapper/category-mapper.test.ts
+    - apps/pim-sync/src/mapper/product-mapper.test.ts
+    - apps/pim-sync/src/mapper/range-mapper.test.ts
+    - apps/pim-sync/src/mapper/transformers.test.ts
+
+# ==========================================================================
+# Key Files
+# ==========================================================================
+
+key_files:
+  - path: apps/pim-sync/src/index.ts
+    purpose: "Entry point — mode detection, sync pipeline orchestration, main()"
+  - path: apps/pim-sync/src/config.ts
+    purpose: "Configuration — 13 env vars, country lookup, loadSyncConfig()"
+  - path: apps/pim-sync/src/pim-client.ts
+    purpose: "Nextpage PIM API client — OAuth2, 3 endpoints, retry logic"
+  - path: apps/pim-sync/src/storyblok-client.ts
+    purpose: "Storyblok Management API client — CRUD, folders, assets, rate limiting"
+  - path: apps/pim-sync/src/pim-types.ts
+    purpose: "PIM type definitions — PimElement, PimValue union, PimResult, PimConfig"
+  - path: apps/pim-sync/src/loader/load-orchestrator.ts
+    purpose: "Initial load orchestrator — phase sequencing, quality gates"
+  - path: apps/pim-sync/src/loader/index.ts
+    purpose: "Loader barrel export — types, quality gate function, re-exports"
+  - path: apps/pim-sync/src/loader/bootstrap-folders.ts
+    purpose: "Create country folder structure in Storyblok"
+  - path: apps/pim-sync/src/loader/product-linker.ts
+    purpose: "Link documents/software to product stories"
+  - path: apps/pim-sync/src/mapper/product-mapper.ts
+    purpose: "Map PimElement to MappedProductContent (29+ fields)"
+  - path: apps/pim-sync/src/mapper/category-mapper.ts
+    purpose: "Map PimElement to CategoryContent"
+  - path: apps/pim-sync/src/mapper/range-mapper.ts
+    purpose: "Map PimElement to RangeContent"
+  - path: apps/pim-sync/src/mapper/transformers.ts
+    purpose: "Pure value extractors — extractStandardValue, extractMultivaloLabels, extractLinkExtIds, parseReferenceList"
+  - path: apps/pim-sync/src/mapper/field-map.ts
+    purpose: "Machine-readable PIM-to-Storyblok field mapping constants"

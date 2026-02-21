@@ -1,0 +1,400 @@
+# Sprint Orchestrator Expertise
+# ADW sprint orchestrator framework — sprint analysis, parallel track execution, worktree management, build/test/review isolation, and team coordination workflows
+# Last validated: 2026-02-21
+
+domain: sprint-orchestrator
+purpose: ADW sprint orchestrator framework — sprint analysis, parallel track execution, worktree management, build/test/review isolation, and team coordination workflows
+
+scope:
+  - adws/ — Python ADW modules and CLI scripts
+  - adws/adw_modules/ — Shared module library for all ADW workflows
+  - .claude/scripts/ — Shell scripts for sprint monitoring and dispatch
+  - .claude/orchestration/ — Workflow templates and workflow-to-team mappings
+  - .claude/agents/ — Agent definitions (team agents, worktree launcher, BMAD)
+
+core_patterns:
+  sprint_orchestrator_pipeline:
+    description: Main orchestration flow for parallel sprint execution
+    entry_point: adws/adw_sprint_orchestrator.py
+    runner: "uv run adw_sprint_orchestrator.py <sprint-status-file> [options]"
+    dependencies: ["python-dotenv", "pydantic", "pyyaml"]
+    workflow:
+      - "1. Analyze sprint-status.yaml to find ready-for-dev stories"
+      - "2. Match stories to workflows and build team compositions"
+      - "3. Create git worktrees for parallel execution"
+      - "4. Launch Claude sessions in iTerm tabs with /plan_w_team"
+      - "5. Monitor completion and run human checkpoints"
+      - "6. Optionally merge completed branches"
+    cli_options:
+      --dry-run: "Show what would be done without changes"
+      --output-yaml: "Output SprintExecution YAML and exit"
+      --launch-only: "Launch tracks, skip monitoring"
+      --max-parallel: "Max parallel tracks (default 3)"
+      --poll-interval: "Seconds between checks (default 30)"
+      --yes: "Skip confirmation prompt"
+      --auto-merge: "Auto-merge approved tracks"
+      --tracks: "Run specific tracks (comma-separated)"
+      --no-railway: "Skip Railway PR environment URLs"
+      --no-teamwork: "Disable Teamwork integration"
+      --no-create-pr: "Disable PR creation"
+      --no-retrospective: "Skip BMAD Retrospective"
+      --teammate-mode: "Agent Teams display mode: tmux|in-process|split-pane"
+
+  isolated_workflow_pattern:
+    description: Each ADW phase runs in isolation with its own entry point
+    modules:
+      adw_plan_iso.py:
+        purpose: "Planning in isolated worktrees"
+        usage: "uv run adw_plan_iso.py <issue-number> [adw-id]"
+        steps:
+          - "Fetch GitHub issue, create worktree, allocate ports"
+          - "Classify issue type, create branch, generate plan"
+          - "Commit plan, push, create/update PR"
+      adw_build_iso.py:
+        purpose: "Building in isolated worktrees"
+        usage: "uv run adw_build_iso.py <issue-number> <adw-id>"
+        requires: "adw_plan_iso.py must run first to create worktree and state"
+        steps:
+          - "Load state, validate worktree, find existing plan"
+          - "Implement solution, commit, push, update PR"
+      adw_test_iso.py:
+        purpose: "Testing in isolated worktrees"
+      adw_review_iso.py:
+        purpose: "Code review in isolated worktrees"
+      adw_plan_build_test_review_iso.py:
+        purpose: "Full pipeline orchestration (plan+build+test+review)"
+      adw_tea_atdd_iso.py:
+        purpose: "ATDD workflow with test-first approach"
+      adw_feedback_loop.py:
+        purpose: "Iterative feedback and improvement cycle"
+
+  sprint_types:
+    description: Pydantic data models for sprint orchestration
+    file: adws/adw_modules/sprint_types.py
+    base_branch: "test"
+    enums:
+      TrackStatus: "pending | running | completed | blocked | failed | merged"
+      StoryStatus: "backlog | ready-for-dev | in-progress | review | done"
+    models:
+      TeamMember:
+        fields: "name, agent_type, expert_command, workflow, role, description, skills"
+      StoryConfig:
+        fields: "story_id, epic_id, status, file_path, dependencies, workflow"
+        computed: "can_start (ready-for-dev AND no blocking deps)"
+      WorkflowConfig:
+        fields: "description, has_frontend, patterns, epics, orchestration"
+      SprintTrack:
+        fields: "story_id, story_display, branch, worktree_path, workflow, team, status"
+      SprintExecution:
+        fields: "project, max_parallel, tracks (dict of SprintTrack)"
+
+  adw_modules_architecture:
+    description: Shared module library powering all ADW workflows
+    modules:
+      state.py: "ADWState — persistent JSON state management per ADW session"
+      git_ops.py: "Git operations — commit, branch, finalize (push + PR update)"
+      github.py: "GitHub API — issue fetch, comments, PR creation, repo URL extraction"
+      workflow_ops.py: "Workflow logic — classify issues, build plans, generate branches, commit formatting"
+      worktree_ops.py: "Worktree lifecycle — create, validate, setup env, port management"
+      worktree_manager.py: "Higher-level worktree + iTerm session management for sprints"
+      track_monitor.py: "Completion detection, human checkpoints, branch merging"
+      sprint_analyzer.py: "Sprint status parsing, workflow matching, team composition"
+      port_registry.py: "Port allocation with file-based locking for parallel tracks"
+      data_types.py: "Shared Pydantic models (GitHubIssue, IssueClassSlashCommand, etc.)"
+      agent.py: "Agent template execution for automated workflows"
+      personas.py: "Agent persona definitions (planner, implementor, reviewer)"
+      railway_ops.py: "Railway deployment — push, PR environments, URL retrieval"
+      teamwork_ops.py: "Teamwork.com integration — task updates, status sync"
+      quality_gates.py: "Quality gate checks — test results, build status"
+      issue_tracker.py: "Sprint issue tracking — blocking issues, severity filtering"
+      bmad_integration.py: "BMAD retrospective integration"
+      skill_eval.py: "Skill evaluation for agent assignments"
+      r2_uploader.py: "Cloudflare R2 upload utility"
+      utils.py: "Logging setup, environment checks"
+
+  workflow_matching:
+    description: Story-to-workflow matching via pattern keywords
+    config_file: .claude/orchestration/workflows.yaml
+    workflows:
+      frontend-component:
+        patterns: ["component", "storyblok", "blok", "accordion", "slider", "video", "faq"]
+        epics: [2]
+        has_frontend: true
+      page-route:
+        patterns: ["page", "route", "layout", "navigation", "catch-all", "middleware"]
+        epics: [1, 3]
+        has_frontend: true
+      storyblok-setup:
+        patterns: ["storyblok sdk", "visual editor", "preview", "webhook"]
+        epics: [1]
+        has_frontend: true
+      content-migration:
+        patterns: ["migration", "ibexa", "yaml", "import", "migrate", "asset"]
+        epics: [4]
+        has_frontend: false
+      pim-integration:
+        patterns: ["pim", "nextpage", "product", "sync", "category"]
+        epics: [5]
+        has_frontend: false
+      search-algolia:
+        patterns: ["algolia", "search", "index", "news", "seo"]
+        epics: [6]
+        has_frontend: true
+      infrastructure:
+        patterns: ["railway", "deploy", "redis", "cache", "ppr", "performance"]
+        epics: [8, 9]
+        has_frontend: false
+      forms-compliance:
+        patterns: ["form", "contact", "didomi", "cookie", "gdpr", "consent"]
+        epics: [7]
+        has_frontend: true
+    default: frontend-component
+    matching_rules: "Case-insensitive, first match wins, order matters"
+
+  shell_scripts:
+    description: Sprint infrastructure shell scripts
+    scripts:
+      dispatch-to-tab.sh:
+        purpose: "Send commands to named iTerm tabs"
+        location: .claude/scripts/dispatch-to-tab.sh
+      sprint-monitor.sh:
+        purpose: "Start orchestrator and tail execution log"
+        location: .claude/scripts/sprint-monitor.sh
+        options: ["--dry-run", "--tracks A,B,C", "--background", "--max-parallel N"]
+      test-sprint.sh:
+        purpose: "Test sprint workflow with a single story"
+        location: .claude/scripts/test-sprint.sh
+      track-watcher.sh:
+        purpose: "Watch track completion and trigger next steps"
+        location: .claude/scripts/track-watcher.sh
+
+  team_agents:
+    description: Agent definitions for team-based orchestration
+    directory: .claude/agents/team/
+    worktree_launcher:
+      file: .claude/agents/worktree-launcher.md
+      purpose: "Creates git worktrees and launches Claude sessions in iTerm tabs"
+      persona: "Infrastructure specialist — setup only, no story analysis"
+    bmad_agents:
+      directory: .claude/agents/bmad/
+      purpose: "BMAD methodology agents for structured development"
+
+  orchestration_templates:
+    description: Per-workflow team composition and task breakdown templates
+    directory: .claude/orchestration/
+    templates:
+      - content-migration.md
+      - forms-compliance.md
+      - frontend-component.md
+      - infrastructure.md
+      - page-route.md
+      - pim-integration.md
+      - search-algolia.md
+      - storyblok-setup.md
+
+  worktree_management:
+    description: Git worktree lifecycle for parallel track isolation
+    creation: "adw_modules/worktree_ops.py — create_worktree()"
+    port_allocation: "adw_modules/port_registry.py — file-based locking with TRACK_PORT_MAP"
+    environment_setup: "Copy .env, install deps, configure ports per worktree"
+    convention:
+      worktree_parent: "/Users/dalton/projects/exhausto"
+      worktree_prefix: "track"
+      branch_pattern: "story/<story-id>"
+    lifecycle:
+      - "Create worktree from base branch (test)"
+      - "Allocate unique ports (avoid conflicts between parallel tracks)"
+      - "Copy gitignored files (.env, etc.) from main repo"
+      - "Setup worktree environment (npm install, etc.)"
+      - "Launch Claude session with /plan_w_team command"
+      - "Monitor for completion markers"
+      - "Deregister ports on cleanup"
+
+  track_monitoring:
+    description: How completion and status are detected
+    file: adws/adw_modules/track_monitor.py
+    completion_markers:
+      - "ADW state file with completion status"
+      - "Git commits on the branch"
+      - "Build/test output files"
+      - "Blocking issues in .sprint_issues"
+    integrations:
+      railway: "Push branch, get PR environment URL, cleanup on merge"
+      teamwork: "Update task status on planning/build complete, PR created"
+      github: "Create PRs, post issue comments"
+      quality_gates: "Run tests, check build status before allowing merge"
+
+key_files:
+  - path: adws/adw_sprint_orchestrator.py
+    purpose: Main sprint orchestrator entry point
+  - path: adws/adw_build_iso.py
+    purpose: Isolated build workflow
+  - path: adws/adw_plan_iso.py
+    purpose: Isolated planning workflow
+  - path: adws/adw_test_iso.py
+    purpose: Isolated test workflow
+  - path: adws/adw_review_iso.py
+    purpose: Isolated review workflow
+  - path: adws/adw_plan_build_test_review_iso.py
+    purpose: Full pipeline orchestration
+  - path: adws/adw_feedback_loop.py
+    purpose: Iterative feedback cycle
+  - path: adws/adw_sprint_analyzer.py
+    purpose: Sprint analysis standalone script
+  - path: adws/adw_tea_atdd_iso.py
+    purpose: ATDD workflow with test-first approach
+  - path: adws/adw_modules/sprint_types.py
+    purpose: Pydantic data models for sprint orchestration
+  - path: adws/adw_modules/sprint_analyzer.py
+    purpose: Sprint status parsing and workflow matching
+  - path: adws/adw_modules/worktree_manager.py
+    purpose: Worktree creation and iTerm session launch
+  - path: adws/adw_modules/track_monitor.py
+    purpose: Track completion detection and merging
+  - path: adws/adw_modules/port_registry.py
+    purpose: Port allocation with file locking
+  - path: adws/adw_modules/worktree_ops.py
+    purpose: Worktree lifecycle operations
+  - path: adws/adw_modules/workflow_ops.py
+    purpose: Issue classification, plan building, branch naming
+  - path: adws/adw_modules/git_ops.py
+    purpose: Git commit, branch, push operations
+  - path: adws/adw_modules/github.py
+    purpose: GitHub API integration
+  - path: adws/adw_modules/state.py
+    purpose: Persistent JSON state per ADW session
+  - path: adws/adw_modules/quality_gates.py
+    purpose: Quality gate checks
+  - path: adws/adw_modules/railway_ops.py
+    purpose: Railway deployment integration
+  - path: adws/adw_modules/teamwork_ops.py
+    purpose: Teamwork.com task management integration
+  - path: adws/parse_plan.py
+    purpose: Markdown plan file parser
+  - path: .claude/orchestration/workflows.yaml
+    purpose: Story-to-workflow pattern matching config
+  - path: .claude/agents/worktree-launcher.md
+    purpose: Worktree launcher agent definition
+  - path: .claude/scripts/sprint-monitor.sh
+    purpose: Sprint monitoring shell script
+  - path: .claude/scripts/dispatch-to-tab.sh
+    purpose: iTerm tab dispatch helper
+  - path: .claude/scripts/test-sprint.sh
+    purpose: Single-story sprint test script
+  - path: .claude/scripts/track-watcher.sh
+    purpose: Track completion watcher
+
+best_practices:
+  - "Always use --dry-run first to preview sprint execution before launching"
+  - "Base branch for all worktree operations is 'test' (not main) — defined in sprint_types.py as BASE_BRANCH"
+  - "Port allocation uses file-based locking (fcntl.flock) for multi-process safety — always pair with threading.Lock for intra-process safety"
+  - "ADW state files persist across sessions — always check for existing state before creating new"
+  - "Worktree environment setup must copy .env and other gitignored files from the main repo"
+  - "Sprint monitor script defaults to _bmad-output/implementation-artifacts/sprint-status.yaml"
+  - "Each ADW phase (plan, build, test, review) can run independently or as part of the full pipeline"
+  - "Team composition is determined by workflow matching — workflows.yaml maps story patterns to orchestration templates"
+  - "Track status transitions: pending -> running -> completed|blocked|failed -> merged"
+  - "Blocking issues in .sprint_issues prevent track completion — resolve before proceeding"
+
+portable_kit:
+  description: Standalone Claude Code orchestrator kit (claude-orchestrator/)
+  purpose: "Drop-in sprint orchestration for any project — no Python packages, no uv, no project-specific deps"
+  directory: claude-orchestrator/
+  key_changes_from_source:
+    validators: "python3 shebang (#!/usr/bin/env python3) instead of uv run --script; no # /// script block"
+    expert_pattern: "/skills:<domain>:plan_build_improve replaces /experts:<domain>:plan_build_improve"
+    hook_commands: "python3 $CLAUDE_PROJECT_DIR/... replaces uv run $CLAUDE_PROJECT_DIR/..."
+    codex_paths: ".claude/codex/ replaces adws/codex/"
+    build_script: ".claude/scripts/run_build_session.sh replaces adws/run_build_session.sh"
+    agent_glob: ".claude/agents/*-agent.md replaces .claude/agents/team/*.md"
+    issue_tracker: "File-based JSONL (.sprint_issues) replaces uv run adws/cli/raise_issue.py"
+    tts: "Optional — no hardcoded script path; projects add their own TTS or skip"
+    validation_examples: "python3 -m py_compile replaces uv run python -m py_compile"
+    package_install: "Generic 'install via your package manager' replaces uv add"
+  ported_commands:
+    plan.md: "Solo planning — minimal changes (removed uv add reference)"
+    plan_w_team.md: "Team planning — 9 adaptations (hooks, experts->skills, paths, codex, build script, agents glob, removed project-specific refs)"
+    build_w_team.md: "Team build — expert activation /skills:, sprint-reporter /skills:, optional TTS, file-based issue tracker"
+  orchestration_commands:
+    run-sprint.md:
+      purpose: "Higher-order entry point — delegates to analyze/launch/monitor sub-commands"
+      lines: 108
+      flags: ["--dry-run", "--tracks", "--max-parallel", "--yes", "--launch-only", "--auto-merge", "--poll-interval", "--no-create-pr", "--teammate-mode"]
+    analyze-sprint.md:
+      purpose: "Phase 1 — read sprint-status.yaml, match workflows, build teams, assign ports"
+      lines: 186
+      replaces: "adws/adw_modules/sprint_analyzer.py + port_registry.py"
+      port_table: "Inline lookup (track-a:3001/9101 through track-f:3006/9106) — no registry file"
+    launch-tracks.md:
+      purpose: "Phase 2 — create worktrees, copy .env, write .ports.env, launch iTerm tabs"
+      lines: 209
+      replaces: "adws/adw_modules/worktree_manager.py + worktree_ops.py"
+      platform_note: "macOS iTerm via osascript; non-macOS falls back to manual CLI commands"
+    monitor-tracks.md:
+      purpose: "Phase 3 — poll .sprint_complete, create PRs via gh, human checkpoint, merge"
+      lines: 215
+      replaces: "adws/adw_modules/track_monitor.py"
+      optional_deps: ["gh CLI for PR creation", "auto-merge via git merge --no-ff"]
+    check-sprint.md:
+      purpose: "Manual status check — find worktrees, read markers, display summary table"
+      lines: 83
+    cleanup-worktrees.md:
+      purpose: "Remove sprint worktrees — git worktree remove + prune"
+      lines: 70
+  ported_skills:
+    sprint-reporter:
+      purpose: "Sprint completion report and voice guide generation"
+      files: 10  # SKILL.md, expertise.yaml, question.md, plan.md, plan_build_improve.md, self-improve.md, self-improve.sh, consolidate.md, report.md, expertise.learnings.jsonl
+      portable_changes: "Removed Storyblok/EXHAUSTO references, generic file categorization patterns, /skills: paths"
+      invoked_by: "build_w_team.md Step 6.7 or standalone via /skills:sprint-reporter:report"
+  portable_workflows:
+    file: ".claude/orchestration/workflows.yaml"
+    examples: ["frontend-component", "backend-api"]
+    template: ".claude/orchestration/example-workflow.md"
+    team_pattern: "test-writer/builder/validator using general-purpose agents with /skills: references"
+  documentation:
+    file: "CLAUDE.md"
+    sections: ["Overview", "Quick Start", "Expert Skill System", "Commands Reference", "Sprint Status Format", "Workflow Configuration", "Sprint Execution Flow", "Port Allocation", "Plan Validation", "Portability Notes"]
+  structure:
+    - ".claude/commands/ — plan.md, plan_w_team.md, build_w_team.md + orchestration commands"
+    - ".claude/hooks/validators/ — plan validators (python3, stdlib only)"
+    - ".claude/scripts/ — build session wrapper"
+    - ".claude/codex/ — review prompt and schema"
+    - ".claude/orchestration/ — workflow templates (workflows.yaml + example-workflow.md)"
+    - ".claude/skills/ — expert skills (sprint-reporter + create-expert-skill bootstrapper)"
+    - ".claude/agents/ — agent wrappers (*-agent.md)"
+    - ".claude/templates/ — skill and agent templates"
+    - "specs/ — plan output directory"
+    - "CLAUDE.md — setup and usage documentation"
+  prerequisites: ["python3 (stdlib only)", "git", "claude CLI"]
+  optional_deps: ["gh CLI (PR creation)", "codex CLI (plan review)", "iTerm/macOS (auto tab launch)"]
+  validation_status:
+    last_validated: "2026-02-21"
+    total_files: 40
+    all_checks_passed: true
+    checks_run:
+      - "No absolute paths (/Users/)"
+      - "No adws/ references"
+      - "No _bmad-output references"
+      - "No uv run in commands/hooks"
+      - "No /experts: in commands/hooks (all /skills:)"
+      - "Python3 shebangs on all validators"
+      - "All .py validators compile (py_compile)"
+      - "Shell scripts executable"
+      - "workflows.yaml valid YAML"
+      - "run-sprint.md under 150 lines (108)"
+      - "Sub-commands under 250 lines each"
+      - "Sprint-reporter skill has all 10 files"
+      - "Expert field regex matches validator pattern"
+      - "All cross-references resolve (hooks, codex, scripts, skills, orchestration)"
+      - "Smoke test: fixture sprint status traces correctly through analyze-sprint logic"
+
+common_pitfalls:
+  - "Running adw_build_iso.py without first running adw_plan_iso.py — build requires existing state and worktree"
+  - "Forgetting to deregister ports when cleaning up worktrees — leads to port conflicts in subsequent sprints"
+  - "Not checking for uncommitted changes before creating worktrees — orchestrator auto-commits but may include unintended files"
+  - "Using main instead of test as base branch — sprint orchestrator creates worktrees from BASE_BRANCH which is 'test'"
+  - "Ignoring --no-railway flag when Railway is not configured — causes errors during PR environment URL retrieval"
+  - "Assuming all subprocess calls have timeouts — test_subprocess_timeouts.py validates this with AST analysis"
+  - "Not handling the quality gate two-step pattern — step 1 generates checksum, step 2 requires --approve-report <checksum>"
+  - "Modifying workflow patterns without updating the default fallback — unmatched stories fall through to frontend-component"
